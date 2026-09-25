@@ -72,6 +72,18 @@
                         </a>
                     </li>
 
+                    {{-- Visible para cualquier staff (moderador o admin): sin condición de rol. --}}
+                    <li>
+                        <a
+                            href="{{ route('staff.reportes') }}"
+                            @if (request()->routeIs('staff.reportes')) aria-current="page" @endif
+                            class="{{ $claseLink }} {{ request()->routeIs('staff.reportes') ? $claseActivo : $claseInactivo }}"
+                            wire:navigate
+                        >
+                            {{ __('Reportes') }}
+                        </a>
+                    </li>
+
                     {{-- TODO: confirmar con backend cómo se accede al rol del usuario staff logueado --}}
                     @if (auth()->user()?->rol === 'admin')
                         <li>
