@@ -12,7 +12,7 @@
             </div>
         @endif
 
-        <form method="POST" action="{{ url('/staff/login') }}" class="flex flex-col gap-5">
+        <form method="POST" action="{{ route('staff.login.store') }}" class="flex flex-col gap-5">
             @csrf
 
             <div class="flex flex-col gap-2">

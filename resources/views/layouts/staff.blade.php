@@ -72,8 +72,7 @@
                         </a>
                     </li>
 
-                    {{-- TODO: confirmar con backend cómo se accede al rol del usuario staff logueado --}}
-                    @if (auth()->user()?->rol === 'admin')
+                    @if (auth('staff')->user()?->isAdmin())
                         <li>
                             <a
                                 href="{{ route('staff.usuarios') }}"

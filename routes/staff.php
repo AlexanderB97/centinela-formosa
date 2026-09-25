@@ -10,7 +10,7 @@ Route::prefix('staff')->name('staff.')->group(function () {
     });
 
     Route::middleware('auth:staff')->group(function () {
-        Route::view('dashboard', 'staff.dashboard')->name('dashboard');
+        Route::view('dashboard', 'pages::staff.dashboard')->name('dashboard');
         Route::post('logout', [LoginController::class, 'destroy'])->name('logout');
     });
 });

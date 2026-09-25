@@ -23,7 +23,7 @@ class LoginController extends Controller
      */
     public function create(): View
     {
-        return view('staff.login');
+        return view('pages::auth.staff-login');
     }
 
     /**

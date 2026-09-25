@@ -1,35 +1,31 @@
 <?php
 
-use App\Models\User;
+use App\Models\UsuarioStaff;
 use Livewire\Livewire;
 
-test('staff dashboard can be rendered', function () {
+test('staff dashboard redirects guests to the staff login', function () {
     $this->get(route('staff.dashboard'))
-        ->assertOk()
-        ->assertSee('Bienvenido/a');
+        ->assertRedirect(route('staff.login'));
 });
 
-test('staff dashboard greets the authenticated user by name', function () {
-    $this->actingAs(User::factory()->create(['name' => 'Ana Pérez']));
+test('staff dashboard greets the authenticated staff member by name', function () {
+    $this->actingAs(UsuarioStaff::factory()->create(['nombre' => 'Ana Pérez']), 'staff');
 
     $this->get(route('staff.dashboard'))
         ->assertOk()
         ->assertSee('Bienvenido/a, Ana Pérez');
 });
 
-test('gestion de staff link is hidden for non admin users', function () {
-    $this->actingAs(User::factory()->create());
+test('gestion de staff link is hidden for moderators', function () {
+    $this->actingAs(UsuarioStaff::factory()->create(), 'staff');
 
     $this->get(route('staff.dashboard'))
         ->assertOk()
         ->assertDontSee('Gestión de staff');
 });
 
-test('gestion de staff link is shown for admin users', function () {
-    $user = User::factory()->create();
-    $user->rol = 'admin';
-
-    $this->actingAs($user);
+test('gestion de staff link is shown for admins', function () {
+    $this->actingAs(UsuarioStaff::factory()->admin()->create(), 'staff');
 
     $this->get(route('staff.dashboard'))
         ->assertOk()
