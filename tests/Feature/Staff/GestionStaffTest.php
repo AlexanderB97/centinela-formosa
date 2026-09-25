@@ -1,5 +1,6 @@
 <?php
 
+use App\Enums\RolStaff;
 use App\Models\UsuarioStaff;
 use Livewire\Livewire;
 
@@ -32,28 +33,42 @@ test('gestion de staff link is shown for admins', function () {
         ->assertSee('Gestión de staff');
 });
 
-test('staff usuarios page can be rendered', function () {
+test('staff usuarios page can be rendered for admins with the real accounts', function () {
+    $admin = UsuarioStaff::factory()->admin()->create(['nombre' => 'Laura Giménez']);
+    UsuarioStaff::factory()->create(['nombre' => 'Martín Acosta', 'email' => 'martin.acosta@centinela.test']);
+
+    $this->actingAs($admin, 'staff');
+
     $this->get(route('staff.usuarios'))
         ->assertOk()
         ->assertSee('Gestión de staff')
-        ->assertSee('laura.gimenez@centinela.test');
+        ->assertSee('Laura Giménez')
+        ->assertSee('martin.acosta@centinela.test')
+        ->assertSee('Moderador');
 });
 
-test('staff mock data never includes passwords', function () {
-    $usuarios = Livewire::test('pages::staff.usuarios')->get('usuarios');
+test('staff listing never includes passwords or hashes', function () {
+    $admin = UsuarioStaff::factory()->admin()->create(['password' => 'secreto-del-admin']);
+    $this->actingAs($admin, 'staff');
 
-    foreach ($usuarios as $usuario) {
-        expect(array_keys($usuario))->toEqual(['name', 'email', 'rol']);
+    $html = $this->get(route('staff.usuarios'))->assertOk()->getContent();
+
+    expect($html)->not->toContain('secreto-del-admin')
+        ->not->toContain($admin->getAuthPassword());
+
+    $cuentas = Livewire::test('pages::staff.usuarios')->instance()->cuentas;
+
+    foreach ($cuentas as $cuenta) {
+        expect(array_keys($cuenta->getAttributes()))->toEqual(['id', 'nombre', 'email', 'rol']);
     }
 });
 
-test('creating a staff account adds a row to the table', function () {
-    $component = Livewire::test('pages::staff.usuarios');
-    $cantidadInicial = count($component->get('usuarios'));
+test('creating a staff account adds a row to the table and persists it', function () {
+    $this->actingAs(UsuarioStaff::factory()->admin()->create(), 'staff');
 
-    $component
-        ->set('name', 'Nuevo Moderador')
-        ->set('email', 'nuevo@centinela.test')
+    Livewire::test('pages::staff.usuarios')
+        ->set('nombre', 'Nuevo Moderador')
+        ->set('email', '  Nuevo@Centinela.test ')
         ->set('password', 'secreto-123')
         ->set('rol', 'moderador')
         ->call('crear')
@@ -63,21 +78,39 @@ test('creating a staff account adds a row to the table', function () {
         ->assertDontSee('secreto-123')
         ->assertSet('password', '');
 
-    expect($component->get('usuarios'))->toHaveCount($cantidadInicial + 1);
+    $creado = UsuarioStaff::where('email', 'nuevo@centinela.test')->sole();
+
+    expect($creado->nombre)->toBe('Nuevo Moderador')
+        ->and($creado->rol)->toBe(RolStaff::Moderador)
+        ->and($creado->password)->not->toBe('secreto-123');
 });
 
 test('duplicate email shows a validation error', function () {
-    $component = Livewire::test('pages::staff.usuarios');
-    $cantidadInicial = count($component->get('usuarios'));
+    $admin = UsuarioStaff::factory()->admin()->create(['email' => 'laura.gimenez@centinela.test']);
+    $this->actingAs($admin, 'staff');
 
-    $component
-        ->set('name', 'Duplicado')
-        ->set('email', 'laura.gimenez@centinela.test')
+    Livewire::test('pages::staff.usuarios')
+        ->set('nombre', 'Duplicado')
+        ->set('email', 'Laura.Gimenez@centinela.test')
         ->set('password', 'secreto-123')
         ->set('rol', 'admin')
         ->call('crear')
-        ->assertHasErrors(['email' => 'not_in'])
+        ->assertHasErrors(['email' => 'unique'])
         ->assertSee('Ya existe una cuenta con ese email.');
 
-    expect($component->get('usuarios'))->toHaveCount($cantidadInicial);
+    expect(UsuarioStaff::count())->toBe(1);
+});
+
+test('moderators cannot use the staff management component', function () {
+    $this->actingAs(UsuarioStaff::factory()->create(), 'staff');
+
+    Livewire::test('pages::staff.usuarios')
+        ->set('nombre', 'Intruso')
+        ->set('email', 'intruso@centinela.test')
+        ->set('password', 'secreto-123')
+        ->set('rol', 'admin')
+        ->call('crear')
+        ->assertForbidden();
+
+    expect(UsuarioStaff::where('email', 'intruso@centinela.test')->exists())->toBeFalse();
 });

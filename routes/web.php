@@ -9,9 +9,6 @@ use Illuminate\Support\Facades\Route;
 Route::livewire('/', 'pages::analizador')->name('home');
 Route::livewire('/analizar', 'pages::analizador')->name('analizar');
 
-// TEMPORAL: solo para pruebas locales de frontend. Backend define las rutas reales y el middleware — coordinar antes de mergear.
-Route::livewire('/staff/usuarios', 'pages::staff.usuarios')->name('staff.usuarios');
-
 // API pública del analizador (HU2.1). La pantalla GET /analizar la sirve el componente Livewire.
 Route::post('analizar', [AnalisisController::class, 'store'])
     ->middleware('throttle:analizar')

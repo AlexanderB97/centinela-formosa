@@ -1,12 +1,18 @@
 <?php
 
+use App\Enums\RolStaff;
+use App\Http\Requests\UsuarioStaffRequest;
+use App\Models\UsuarioStaff;
+use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
+use Livewire\Attributes\Computed;
 use Livewire\Attributes\Layout;
 use Livewire\Attributes\Title;
 use Livewire\Component;
 
 new #[Layout('layouts::staff')] #[Title('Gestión de staff')] class extends Component {
+    // DEPRECATED: ya no se usa, el listado real sale de cuentas(). Se deja como referencia.
     /**
      * MOCK: datos de ejemplo en memoria solo para maquetar. Backend los reemplaza
      * por el listado real de cuentas de staff. Nunca incluir password ni hash.
@@ -19,7 +25,7 @@ new #[Layout('layouts::staff')] #[Title('Gestión de staff')] class extends Comp
         ['name' => 'Sofía Benítez', 'email' => 'sofia.benitez@centinela.test', 'rol' => 'moderador'],
     ];
 
-    public string $name = '';
+    public string $nombre = '';
     public string $email = '';
     public string $password = '';
     public string $rol = '';
@@ -27,21 +33,55 @@ new #[Layout('layouts::staff')] #[Title('Gestión de staff')] class extends Comp
     public string $estado = '';
 
     /**
+     * Cuentas reales de staff. Solo se leen id, nombre, email y rol: el password nunca sale de la base.
+     *
+     * @return Collection<int, UsuarioStaff>
+     */
+    #[Computed]
+    public function cuentas(): Collection
+    {
+        return UsuarioStaff::query()->orderBy('nombre')->get(['id', 'nombre', 'email', 'rol']);
+    }
+
+    /**
+     * Alta real de una cuenta de staff, con las mismas reglas que POST /staff/usuarios.
+     */
+    public function crear(): void
+    {
+        // Defensa extra además del middleware admin.staff (que también corre en cada request de Livewire).
+        abort_unless(auth('staff')->user()?->isAdmin(), 403);
+
+        $this->estado = '';
+        $this->email = UsuarioStaffRequest::normalizarEmail($this->email);
+
+        $datos = $this->validate(UsuarioStaffRequest::reglas(), UsuarioStaffRequest::mensajes());
+
+        // El modelo castea el password a hashed: la cuenta puede loguearse en /staff/login enseguida.
+        UsuarioStaff::create($datos);
+
+        $this->estado = "Cuenta de {$this->nombre} creada.";
+
+        $this->reset('nombre', 'email', 'password', 'rol');
+        unset($this->cuentas);
+    }
+
+    // DEPRECATED: ya no se usa, crear() con UsuarioStaff real lo reemplaza. Se deja como referencia.
+    /**
      * MOCK: simula el alta en memoria. Backend reemplaza esto con el POST real
      * (validación definitiva, hash del password, persistencia y autorización).
      */
-    public function crear(): void
+    private function crearMock(): void
     {
         $this->estado = '';
         $this->email = Str::lower(trim($this->email));
 
         $this->validate([
-            'name' => ['required', 'string', 'max:255'],
+            'nombre' => ['required', 'string', 'max:255'],
             'email' => ['required', 'string', 'email', 'max:255', Rule::notIn(array_column($this->usuarios, 'email'))],
             'password' => ['required', 'string', 'min:8'],
             'rol' => ['required', Rule::in(['moderador', 'admin'])],
         ], [
-            'name.required' => 'El nombre es obligatorio.',
+            'nombre.required' => 'El nombre es obligatorio.',
             'email.required' => 'El email es obligatorio.',
             'email.email' => 'El email no tiene un formato válido.',
             'email.not_in' => 'Ya existe una cuenta con ese email.',
@@ -52,11 +92,11 @@ new #[Layout('layouts::staff')] #[Title('Gestión de staff')] class extends Comp
         ]);
 
         // El password no se guarda en el listado.
-        $this->usuarios[] = ['name' => $this->name, 'email' => $this->email, 'rol' => $this->rol];
+        $this->usuarios[] = ['name' => $this->nombre, 'email' => $this->email, 'rol' => $this->rol];
 
-        $this->estado = "Cuenta de {$this->name} creada.";
+        $this->estado = "Cuenta de {$this->nombre} creada.";
 
-        $this->reset('name', 'email', 'password', 'rol');
+        $this->reset('nombre', 'email', 'password', 'rol');
     }
 }; ?>
 
@@ -87,17 +127,17 @@ new #[Layout('layouts::staff')] #[Title('Gestión de staff')] class extends Comp
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-neutral-100 text-neutral-900">
-                        @foreach ($usuarios as $usuario)
-                            <tr wire:key="usuario-{{ $usuario['email'] }}">
-                                <td class="whitespace-nowrap px-6 py-3">{{ $usuario['name'] }}</td>
-                                <td class="whitespace-nowrap px-6 py-3">{{ $usuario['email'] }}</td>
+                        @foreach ($this->cuentas as $cuenta)
+                            <tr wire:key="usuario-{{ $cuenta->id }}">
+                                <td class="whitespace-nowrap px-6 py-3">{{ $cuenta->nombre }}</td>
+                                <td class="whitespace-nowrap px-6 py-3">{{ $cuenta->email }}</td>
                                 <td class="px-6 py-3">
                                     <span @class([
                                         'inline-block rounded-full px-2.5 py-0.5 text-xs font-medium',
-                                        'bg-[#8a5a1f] text-white' => $usuario['rol'] === 'admin',
-                                        'bg-neutral-200 text-neutral-800' => $usuario['rol'] !== 'admin',
+                                        'bg-[#8a5a1f] text-white' => $cuenta->rol === RolStaff::Admin,
+                                        'bg-neutral-200 text-neutral-800' => $cuenta->rol !== RolStaff::Admin,
                                     ])>
-                                        {{ ucfirst($usuario['rol']) }}
+                                        {{ ucfirst($cuenta->rol->value) }}
                                     </span>
                                 </td>
                             </tr>
@@ -127,14 +167,14 @@ new #[Layout('layouts::staff')] #[Title('Gestión de staff')] class extends Comp
 
             <form wire:submit="crear" class="flex flex-col gap-4">
                 <div class="flex flex-col gap-2">
-                    <label for="name" class="text-sm font-medium text-neutral-800">{{ __('Nombre') }}</label>
+                    <label for="nombre" class="text-sm font-medium text-neutral-800">{{ __('Nombre') }}</label>
                     <input
-                        id="name"
+                        id="nombre"
                         type="text"
-                        wire:model="name"
+                        wire:model="nombre"
                         required
                         autocomplete="off"
-                        @error('name') aria-invalid="true" aria-describedby="alta-errores" @enderror
+                        @error('nombre') aria-invalid="true" aria-describedby="alta-errores" @enderror
                         class="{{ $claseInput }}"
                     />
                 </div>
