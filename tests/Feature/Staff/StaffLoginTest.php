@@ -96,12 +96,11 @@ test('the home page does not link to the staff login', function () {
     $this->get(route('home'))->assertDontSee('/staff', escape: false);
 });
 
-test('the seeder creates one moderator and one admin without overwriting them on re-run', function () {
+it('the seeder creates one moderator and one admin with the known test password, resetting it on re-run', function () {
     $this->seed(UsuarioStaffSeeder::class);
-    $passwordsOriginales = UsuarioStaff::pluck('password', 'email');
-
     $this->seed(UsuarioStaffSeeder::class);
 
     expect(UsuarioStaff::pluck('rol')->all())->toEqualCanonicalizing([RolStaff::Moderador, RolStaff::Admin])
-        ->and(UsuarioStaff::pluck('password', 'email'))->toEqual($passwordsOriginales);
+        ->and(Hash::check('centinela2026', UsuarioStaff::where('email', 'admin@centinela-formosa.test')->first()->password))->toBeTrue()
+        ->and(Hash::check('centinela2026', UsuarioStaff::where('email', 'moderador@centinela-formosa.test')->first()->password))->toBeTrue();
 });
