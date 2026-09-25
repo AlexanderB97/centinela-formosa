@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\Staff\LoginController;
+use App\Http\Controllers\Staff\ModeracionController;
 use App\Http\Controllers\Staff\UsuarioController;
 use Illuminate\Support\Facades\Route;
 
@@ -16,6 +17,8 @@ Route::prefix('staff')->name('staff.')->group(function () {
 
         // Cola de moderación (HU2.3): cualquier staff, moderador o admin.
         Route::livewire('reportes', 'pages::staff.reportes')->name('reportes');
+        Route::post('reportes/{reporte}/confirmar', [ModeracionController::class, 'confirmar'])->name('reportes.confirmar');
+        Route::post('reportes/{reporte}/descartar', [ModeracionController::class, 'descartar'])->name('reportes.descartar');
 
         // Gestión de staff (HU1.2): solo admins; un moderador recibe 403.
         Route::middleware('admin.staff')->group(function () {

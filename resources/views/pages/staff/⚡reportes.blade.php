@@ -1,5 +1,9 @@
 <?php
 
+use App\Enums\EstadoReporte;
+use App\Models\Reporte;
+use App\Services\ModerarReporte;
+use Illuminate\Validation\ValidationException;
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\Layout;
 use Livewire\Attributes\Locked;
@@ -7,12 +11,14 @@ use Livewire\Attributes\Title;
 use Livewire\Component;
 
 new #[Layout('layouts::staff')] #[Title('Reportes')] class extends Component {
+    // DEPRECATED: solo lo usa resolverMock(). Se deja como referencia.
     /**
      * MOCK: el reporte con este ID simula que otro moderador lo resolvió mientras
      * estaba abierto, para poder ver el 422 "ya no está pendiente" en el navegador.
      */
     private const ID_CONFLICTO_MOCK = 3;
 
+    // DEPRECATED: ya no se usa, la cola real sale de pendientes(). Se deja como referencia.
     /**
      * MOCK: datos de ejemplo en memoria solo para maquetar. Backend los reemplaza por
      * GET /staff/reportes (reportes pendientes con su análisis vinculado completo).
@@ -80,12 +86,33 @@ new #[Layout('layouts::staff')] #[Title('Reportes')] class extends Component {
     public int $numeroAviso = 0;
 
     /**
-     * @return array<int, array{id: int, comentario: string|null, estado: string, analisis: array<string, mixed>}>
+     * Reportes pendientes con su análisis completo, en la misma forma de array que usaba el mock
+     * (tipo y nivel como string), del más viejo al más nuevo.
+     *
+     * @return array<int, array{id: int, comentario: string|null, estado: string, analisis: array{tipo: string, contenido: string, nivel: string, razones: array<int, string>, explicacion: string}}>
      */
     #[Computed]
     public function pendientes(): array
     {
-        return array_values(array_filter($this->reportes, fn (array $reporte) => $reporte['estado'] === 'pendiente'));
+        return Reporte::query()
+            ->with('analisis')
+            ->where('estado', EstadoReporte::Pendiente->value)
+            ->oldest()
+            ->oldest('id')
+            ->get()
+            ->map(fn (Reporte $reporte) => [
+                'id' => $reporte->id,
+                'comentario' => $reporte->comentario,
+                'estado' => $reporte->estado->value,
+                'analisis' => [
+                    'tipo' => $reporte->analisis->tipo->value,
+                    'contenido' => $reporte->analisis->contenido,
+                    'nivel' => $reporte->analisis->nivel->value,
+                    'razones' => $reporte->analisis->razones,
+                    'explicacion' => $reporte->analisis->explicacion,
+                ],
+            ])
+            ->all();
     }
 
     public function confirmar(int $id): void
@@ -98,16 +125,39 @@ new #[Layout('layouts::staff')] #[Title('Reportes')] class extends Component {
         $this->resolver($id, 'descartado');
     }
 
+    /**
+     * Misma lógica que POST /staff/reportes/{reporte}/confirmar|descartar, sin pasar por HTTP.
+     */
     private function resolver(int $id, string $nuevoEstado): void
     {
-        // TODO: backend reemplaza esta llamada por POST /staff/reportes/{id}/confirmar o /descartar.
-        [$status, $mensaje] = $this->resolverMock($id, $nuevoEstado);
-
-        $this->tipoAviso = $status === 422 ? 'conflicto' : 'exito';
-        $this->aviso = $mensaje;
         $this->numeroAviso++;
+        unset($this->pendientes);
+
+        $reporte = Reporte::find($id);
+
+        if ($reporte === null) {
+            $this->tipoAviso = 'conflicto';
+            $this->aviso = "No encontramos el reporte #{$id}. Puede que ya se haya resuelto.";
+
+            return;
+        }
+
+        try {
+            $moderar = app(ModerarReporte::class);
+            $nuevoEstado === 'confirmado' ? $moderar->confirmar($reporte) : $moderar->descartar($reporte);
+        } catch (ValidationException $e) {
+            // 422: otro moderador lo resolvió antes (o doble clic). Aviso calmo y sale de la cola.
+            $this->tipoAviso = 'conflicto';
+            $this->aviso = collect($e->errors())->flatten()->first().' Lo sacamos de tu cola.';
+
+            return;
+        }
+
+        $this->tipoAviso = 'exito';
+        $this->aviso = "Reporte #{$id} {$nuevoEstado}.";
     }
 
+    // DEPRECATED: ya no se usa, ModerarReporte real lo reemplaza. Se deja como referencia.
     /**
      * MOCK: simula POST /staff/reportes/{id}/confirmar|descartar en memoria. Cambia el estado
      * del reporte (no lo borra) y devuelve [status, mensaje] imitando el 200 y el 422 del contrato.

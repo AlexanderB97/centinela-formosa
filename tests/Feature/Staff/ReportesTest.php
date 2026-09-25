@@ -1,118 +1,203 @@
 <?php
 
-use App\Models\User;
+use App\Enums\EstadoReporte;
+use App\Enums\NivelRiesgo;
+use App\Enums\TipoContenido;
+use App\Models\Analisis;
+use App\Models\CasoConfirmado;
+use App\Models\Reporte;
+use App\Models\UsuarioStaff;
+use App\Services\ModerarReporte;
 use Livewire\Livewire;
 
-function estadoDelReporte($component, int $id): string
+beforeEach(function () {
+    $this->actingAs(UsuarioStaff::factory()->create(), 'staff');
+});
+
+/**
+ * Three pending reports with the same variety the frontend mock had.
+ *
+ * @return array{0: Reporte, 1: Reporte, 2: Reporte}
+ */
+function reportesDeEjemplo(): array
 {
-    return collect($component->get('reportes'))->firstWhere('id', $id)['estado'];
+    $crear = fn (array $analisis, ?string $comentario) => Reporte::factory()
+        ->for(Analisis::factory()->create($analisis))
+        ->create(['comentario' => $comentario]);
+
+    return [
+        $crear([
+            'tipo' => TipoContenido::Texto,
+            'contenido' => "URGENTE: tu cuenta bancaria fue suspendida.\nPara reactivarla respondé con tu clave.",
+            'nivel' => NivelRiesgo::Riesgo,
+            'razones' => ['Menciona una entidad bancaria o datos de cuenta.', 'Pide datos sensibles como claves o códigos.'],
+            'explicacion' => 'El mensaje se hace pasar por un banco y pide la clave.',
+        ], 'Me llegó por WhatsApp, decía ser del banco.'),
+        $crear([
+            'tipo' => TipoContenido::Link,
+            'contenido' => 'http://mi-cuenta-premios-oficial-2024.com/ingresar',
+            'nivel' => NivelRiesgo::Dudoso,
+            'razones' => ['El enlace no usa conexión segura (https).'],
+            'explicacion' => 'El dominio tiene características que suelen usarse para imitar sitios oficiales.',
+        ], null),
+        $crear([
+            'tipo' => TipoContenido::Qr,
+            'contenido' => 'https://carta.bar-ejemplo.com.ar/menu',
+            'nivel' => NivelRiesgo::Seguro,
+            'razones' => ['No se detectaron patrones típicos de estafa.'],
+            'explicacion' => 'No encontramos señales de riesgo en el contenido del código QR.',
+        ], 'El QR estaba pegado sobre la carta de un bar.'),
+    ];
 }
 
-test('reportes page can be rendered', function () {
+test('reportes page can be rendered for any staff role', function (bool $esAdmin) {
+    $staff = $esAdmin ? UsuarioStaff::factory()->admin()->create() : UsuarioStaff::factory()->create();
+    $this->actingAs($staff, 'staff');
+    [$uno, $dos, $tres] = reportesDeEjemplo();
+
     $this->get(route('staff.reportes'))
         ->assertOk()
         ->assertSee('Reportes pendientes')
-        ->assertSee('Reporte #1')
-        ->assertSee('Reporte #2')
-        ->assertSee('Reporte #3');
+        ->assertSee("Reporte #{$uno->id}")
+        ->assertSee("Reporte #{$dos->id}")
+        ->assertSee("Reporte #{$tres->id}");
+})->with(['moderador' => false, 'admin' => true]);
+
+test('guests are redirected to the staff login', function () {
+    auth('staff')->logout();
+
+    $this->get(route('staff.reportes'))->assertRedirect(route('staff.login'));
+});
+
+test('only pending reports are listed', function () {
+    $pendiente = Reporte::factory()->create();
+    $confirmado = Reporte::factory()->create(['estado' => EstadoReporte::Confirmado]);
+    $descartado = Reporte::factory()->create(['estado' => EstadoReporte::Descartado]);
+
+    Livewire::test('pages::staff.reportes')
+        ->assertSeeHtml("data-reporte=\"{$pendiente->id}\"")
+        ->assertDontSeeHtml("data-reporte=\"{$confirmado->id}\"")
+        ->assertDontSeeHtml("data-reporte=\"{$descartado->id}\"")
+        ->assertSee('(1)');
 });
 
 test('each card shows the full linked analysis, not only the comment', function () {
+    reportesDeEjemplo();
+
     Livewire::test('pages::staff.reportes')
-        // Reporte #1: texto, riesgo, con comentario.
+        // Texto, riesgo, con comentario.
         ->assertSee('tu cuenta bancaria fue suspendida')
         ->assertSee('Nivel: Riesgo')
         ->assertSee('Pide datos sensibles como claves o códigos.')
         ->assertSee('se hace pasar por un banco')
         ->assertSee('decía ser del banco')
-        // Reporte #2: link, dudoso, sin comentario.
+        // Link, dudoso, sin comentario.
         ->assertSee('http://mi-cuenta-premios-oficial-2024.com/ingresar')
         ->assertSee('Nivel: Dudoso')
         ->assertSee('Sin comentario')
-        // Reporte #3: qr, seguro.
+        // QR, seguro.
         ->assertSee('Foto de QR')
         ->assertSee('Nivel: Seguro');
 });
 
 test('reported links are never rendered as clickable anchors', function () {
+    reportesDeEjemplo();
+
     $html = Livewire::test('pages::staff.reportes')->html();
 
     expect($html)->not->toContain('href="http://mi-cuenta-premios-oficial-2024.com');
     expect($html)->not->toContain('href="https://carta.bar-ejemplo.com.ar');
 });
 
-test('reportes link is visible for any staff role, without role condition', function (?string $rol) {
-    if ($rol !== null) {
-        $user = User::factory()->create();
-        $user->rol = $rol;
-        $this->actingAs($user);
-    }
+test('reportes link is visible for any staff role, without role condition', function (bool $esAdmin) {
+    $staff = $esAdmin ? UsuarioStaff::factory()->admin()->create() : UsuarioStaff::factory()->create();
+    $this->actingAs($staff, 'staff');
 
     $this->get(route('staff.dashboard'))
         ->assertOk()
         ->assertSee('href="'.route('staff.reportes').'"', false);
-})->with(['moderador' => 'moderador', 'admin' => 'admin', 'sin sesion' => null]);
+})->with(['moderador' => false, 'admin' => true]);
 
-test('confirming a report removes its card but keeps the record', function () {
-    $component = Livewire::test('pages::staff.reportes')
-        ->call('confirmar', 1)
+test('confirming a report removes its card, keeps the record and creates the confirmed case', function () {
+    [$uno, $dos] = reportesDeEjemplo();
+
+    Livewire::test('pages::staff.reportes')
+        ->call('confirmar', $uno->id)
         ->assertSet('tipoAviso', 'exito')
-        ->assertSee('Reporte #1 confirmado.')
-        ->assertDontSee('data-reporte="1"', false)
-        ->assertSee('data-reporte="2"', false);
+        ->assertSee("Reporte #{$uno->id} confirmado.")
+        ->assertDontSeeHtml("data-reporte=\"{$uno->id}\"")
+        ->assertSeeHtml("data-reporte=\"{$dos->id}\"");
 
-    expect($component->get('reportes'))->toHaveCount(3);
-    expect(estadoDelReporte($component, 1))->toBe('confirmado');
+    expect(Reporte::count())->toBe(3)
+        ->and($uno->refresh()->estado)->toBe(EstadoReporte::Confirmado)
+        ->and(CasoConfirmado::sole()->contenido)->toBe($uno->analisis->contenido);
 });
 
-test('discarding a report removes its card but keeps the record', function () {
-    $component = Livewire::test('pages::staff.reportes')
-        ->call('descartar', 2)
-        ->assertSet('tipoAviso', 'exito')
-        ->assertSee('Reporte #2 descartado.')
-        ->assertDontSee('data-reporte="2"', false);
+test('discarding a report removes its card, keeps the record and creates no case', function () {
+    [, $dos] = reportesDeEjemplo();
 
-    expect($component->get('reportes'))->toHaveCount(3);
-    expect(estadoDelReporte($component, 2))->toBe('descartado');
+    Livewire::test('pages::staff.reportes')
+        ->call('descartar', $dos->id)
+        ->assertSet('tipoAviso', 'exito')
+        ->assertSee("Reporte #{$dos->id} descartado.")
+        ->assertDontSeeHtml("data-reporte=\"{$dos->id}\"");
+
+    expect(Reporte::count())->toBe(3)
+        ->and($dos->refresh()->estado)->toBe(EstadoReporte::Descartado)
+        ->and(CasoConfirmado::count())->toBe(0);
 });
 
 test('acting twice on the same report shows a clear no longer pending notice', function () {
-    $component = Livewire::test('pages::staff.reportes')
-        ->call('confirmar', 1)
-        ->call('descartar', 1)
-        ->assertSet('tipoAviso', 'conflicto')
-        ->assertSee('El reporte #1 ya no está pendiente')
-        ->assertSee('data-aviso="conflicto"', false)
-        ->assertDontSee('bg-red-50', false);
+    [$uno] = reportesDeEjemplo();
 
-    expect(estadoDelReporte($component, 1))->toBe('confirmado');
+    Livewire::test('pages::staff.reportes')
+        ->call('confirmar', $uno->id)
+        ->call('descartar', $uno->id)
+        ->assertSet('tipoAviso', 'conflicto')
+        ->assertSee("El reporte #{$uno->id} ya no está pendiente")
+        ->assertSeeHtml('data-aviso="conflicto"')
+        ->assertDontSeeHtml('bg-red-50');
+
+    expect($uno->refresh()->estado)->toBe(EstadoReporte::Confirmado)
+        ->and(CasoConfirmado::count())->toBe(1);
 });
 
 test('report resolved by another moderator returns the conflict and leaves the queue', function () {
+    [, , $tres] = reportesDeEjemplo();
+
     $component = Livewire::test('pages::staff.reportes')
-        ->assertSee('data-reporte="3"', false)
-        ->call('descartar', 3)
+        ->assertSeeHtml("data-reporte=\"{$tres->id}\"");
+
+    // Otro moderador lo confirma mientras esta cola sigue abierta.
+    app(ModerarReporte::class)->confirmar(Reporte::find($tres->id));
+
+    $component->call('descartar', $tres->id)
         ->assertSet('tipoAviso', 'conflicto')
         ->assertSee('otro moderador ya lo resolvió')
-        ->assertDontSee('data-reporte="3"', false);
+        ->assertSee('Lo sacamos de tu cola.')
+        ->assertDontSeeHtml("data-reporte=\"{$tres->id}\"");
 
-    expect(estadoDelReporte($component, 3))->not->toBe('descartado');
+    expect($tres->refresh()->estado)->toBe(EstadoReporte::Confirmado);
 });
 
 test('unknown report id shows a notice without breaking the page', function () {
+    [$uno] = reportesDeEjemplo();
+
     Livewire::test('pages::staff.reportes')
         ->call('confirmar', 999)
         ->assertSet('tipoAviso', 'conflicto')
         ->assertSee('No encontramos el reporte #999.')
-        ->assertSee('data-reporte="1"', false);
+        ->assertSeeHtml("data-reporte=\"{$uno->id}\"");
 });
 
 test('empty state is shown when there is nothing left to review', function () {
+    [$uno, $dos, $tres] = reportesDeEjemplo();
+
     Livewire::test('pages::staff.reportes')
         ->assertDontSee('No hay nada para revisar')
-        ->call('confirmar', 1)
-        ->call('descartar', 2)
-        ->call('confirmar', 3)
+        ->call('confirmar', $uno->id)
+        ->call('descartar', $dos->id)
+        ->call('confirmar', $tres->id)
         ->assertSee('No hay nada para revisar')
         ->assertSee('Reportes pendientes')
         ->assertSee('(0)');
