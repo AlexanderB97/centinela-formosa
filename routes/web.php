@@ -10,6 +10,7 @@ Route::view('/staff/login', 'pages::auth.staff-login')->name('staff.login');
 // TEMPORAL: solo para pruebas locales de frontend. Backend define las rutas reales y el middleware — coordinar antes de mergear.
 Route::view('/staff/dashboard', 'pages::staff.dashboard')->name('staff.dashboard');
 Route::livewire('/staff/usuarios', 'pages::staff.usuarios')->name('staff.usuarios');
+Route::livewire('/staff/reportes', 'pages::staff.reportes')->name('staff.reportes');
 
 Route::middleware(['auth', 'verified'])->group(function () {
     Route::view('dashboard', 'dashboard')->name('dashboard');
