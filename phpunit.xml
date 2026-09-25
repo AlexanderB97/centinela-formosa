@@ -33,6 +33,8 @@
         <env name="TELESCOPE_ENABLED" value="false"/>
         <env name="NIGHTWATCH_ENABLED" value="false"/>
         <env name="APP_URL" value="http://localhost"/>
+        <env name="VIRUSTOTAL_API_KEY" value=""/>
+        <env name="GEMINI_API_KEY" value=""/>
 
     </php>
 </phpunit>
