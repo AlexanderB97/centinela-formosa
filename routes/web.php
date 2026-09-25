@@ -7,6 +7,10 @@ use Illuminate\Support\Facades\Route;
 Route::livewire('/', 'pages::analizador')->name('home');
 Route::livewire('/analizar', 'pages::analizador')->name('analizar');
 
+// TEMPORAL: la URL pública /impacto es la definitiva. Lo que cambia cuando backend implemente HU3.1
+// es el origen de los datos (hoy es un mock en memoria dentro del componente pages::impacto).
+Route::livewire('/impacto', 'pages::impacto')->name('impacto');
+
 // TEMPORAL: solo para pruebas locales de frontend. Backend define la ruta real (GET+POST) y el middleware — coordinar antes de mergear.
 Route::view('/staff/login', 'pages::auth.staff-login')->name('staff.login');
 

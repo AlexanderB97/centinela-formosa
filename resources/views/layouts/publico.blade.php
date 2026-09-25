@@ -15,6 +15,23 @@
                     </svg>
                     <span class="font-semibold text-white">Centinela Formosa</span>
                 </a>
+
+                <ul class="ml-auto flex items-center gap-1">
+                    <li>
+                        <a
+                            href="{{ route('impacto') }}"
+                            @if (request()->routeIs('impacto')) aria-current="page" @endif
+                            @class([
+                                'rounded-md px-3 py-2 text-sm font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-[#22c55e]',
+                                'bg-white/10 text-white' => request()->routeIs('impacto'),
+                                'text-neutral-300 hover:bg-white/5 hover:text-white' => ! request()->routeIs('impacto'),
+                            ])
+                            wire:navigate
+                        >
+                            {{ __('Impacto') }}
+                        </a>
+                    </li>
+                </ul>
             </nav>
         </header>
 
