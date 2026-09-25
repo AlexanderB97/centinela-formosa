@@ -287,7 +287,38 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
         </p>
     </div>
 
-    <section class="rounded-xl bg-white p-4 shadow-sm sm:p-6">
+    @php
+        // Íconos SVG inline (trazos de 24x24), sin librerías externas.
+        $iconos = [
+            'texto' => '<path d="M21 12a8 8 0 0 1-11.6 7.14L4 20l1.1-4.2A8 8 0 1 1 21 12Z" />',
+            'link' => '<path d="M10 14a4 4 0 0 0 5.66 0l3-3a4 4 0 0 0-5.66-5.66l-1 1" /><path d="M14 10a4 4 0 0 0-5.66 0l-3 3a4 4 0 0 0 5.66 5.66l1-1" />',
+            'qr' => '<rect x="4" y="4" width="6" height="6" rx="1" /><rect x="14" y="4" width="6" height="6" rx="1" /><rect x="4" y="14" width="6" height="6" rx="1" /><path d="M14 14h2v2M20 14v2M14 20h6M18 18v2" />',
+            'documento' => '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5Z" /><path d="M14 3v5h5M9 13h6M9 17h4" />',
+            'camara' => '<path d="M4 8h3l2-3h6l2 3h3v11H4V8Z" /><circle cx="12" cy="13" r="3.5" />',
+        ];
+
+        // Ejemplos inventados a partir de patrones reales de estafa; se cargan en el campo, no se analizan solos.
+        $ejemplos = [
+            'texto' => [
+                ['titulo' => __('Falso aviso del banco'), 'contenido' => 'URGENTE: tu cuenta bancaria fue suspendida. Para reactivarla respondé este mensaje con tu número de tarjeta y tu clave antes de las 18 hs.'],
+                ['titulo' => __('Premio que nunca ganaste'), 'contenido' => '¡Felicitaciones! Ganaste un premio en el sorteo aniversario. Para cobrarlo confirmá tus datos en bit.ly/premio-cobro'],
+                ['titulo' => __('Familiar con número nuevo'), 'contenido' => 'Hola, soy tu hijo, cambié de número. Necesito que me transfieras hoy mismo, es urgente, después te explico.'],
+            ],
+            'link' => [
+                ['titulo' => __('Link acortado que oculta el destino'), 'contenido' => 'https://bit.ly/3xYz-beneficio'],
+                ['titulo' => __('Imita a una marca conocida'), 'contenido' => 'https://mercadopago-ayuda.xyz/login'],
+                ['titulo' => __('Sin conexión segura y lleno de guiones'), 'contenido' => 'http://mi-cuenta-segura-oficial.com/ingresar'],
+            ],
+        ];
+
+        $zona = 'flex flex-col items-center gap-2 rounded-xl border-2 border-dashed border-neutral-300 bg-neutral-50 px-4 py-6 text-center transition focus-within:border-[#16a34a] sm:px-8 sm:py-8';
+        $iconoZona = 'mb-1 flex size-14 items-center justify-center rounded-full bg-[#16a34a]/10 text-[#16a34a]';
+        $tituloZona = 'text-lg font-semibold text-neutral-900 sm:text-xl';
+        $ayudaZona = 'text-sm text-neutral-500';
+        $claseCampo = 'mt-3 w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-left text-neutral-900 placeholder:text-neutral-400 focus:border-[#16a34a] focus:outline-none focus:ring-2 focus:ring-[#16a34a]/40';
+    @endphp
+
+    <section class="overflow-hidden rounded-xl bg-white shadow-sm">
         <div
             role="tablist"
             aria-label="{{ __('Qué querés analizar') }}"
@@ -302,7 +333,7 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
             }"
             x-on:keydown.arrow-right.prevent="mover(1)"
             x-on:keydown.arrow-left.prevent="mover(-1)"
-            class="grid grid-cols-3 gap-1 rounded-lg bg-neutral-100 p-1"
+            class="flex border-b border-neutral-200 px-2 sm:px-4"
         >
             @foreach (['texto' => __('Texto'), 'link' => __('Link'), 'qr' => __('Foto de QR')] as $valor => $etiqueta)
                 <button
@@ -317,38 +348,61 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
                     wire:loading.attr="disabled"
                     wire:target="analizar"
                     @class([
-                        'rounded-md px-2 py-2 text-sm font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-[#16a34a] disabled:opacity-60',
-                        'bg-[#12151a] text-white shadow-sm' => $tipo === $valor,
-                        'text-neutral-700 hover:bg-neutral-200' => $tipo !== $valor,
+                        'group -mb-px inline-flex flex-1 items-center justify-center gap-2 border-b-4 px-2 py-3 text-sm font-medium transition focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#16a34a] disabled:opacity-60 sm:text-base',
+                        'border-[#16a34a] text-[#12151a]' => $tipo === $valor,
+                        'border-transparent text-neutral-500 hover:border-neutral-300 hover:text-neutral-800' => $tipo !== $valor,
                     ])
                 >
-                    {{ $etiqueta }}
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false" @class([
+                        'size-5 shrink-0',
+                        'text-[#16a34a]' => $tipo === $valor,
+                        'text-neutral-400 group-hover:text-neutral-600' => $tipo !== $valor,
+                    ])>{!! $iconos[$valor] !!}</svg>
+                    <span>{{ $etiqueta }}</span>
                 </button>
             @endforeach
         </div>
 
-        <div role="tabpanel" id="panel-analisis" aria-labelledby="tab-{{ $tipo }}" class="mt-5">
+        <div
+            role="tabpanel"
+            id="panel-analisis"
+            aria-labelledby="tab-{{ $tipo }}"
+            x-data="{
+                ejemplosAbiertos: false,
+                usar(texto, campo) {
+                    this.$wire.contenido = texto;
+                    this.ejemplosAbiertos = false;
+                    this.$nextTick(() => document.getElementById(campo)?.focus());
+                },
+            }"
+            class="p-4 sm:p-6"
+        >
             <form wire:submit="analizar" x-on:submit="errorCliente = false" novalidate class="flex flex-col gap-4">
-                @php
-                    $claseCampo = 'w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-neutral-900 placeholder:text-neutral-400 focus:border-[#16a34a] focus:outline-none focus:ring-2 focus:ring-[#16a34a]/40';
-                @endphp
-
                 @if ($tipo === 'texto')
-                    <div class="flex flex-col gap-2">
-                        <label for="contenido-texto" class="text-sm font-medium text-neutral-800">{{ __('Mensaje') }}</label>
+                    <div class="{{ $zona }}">
+                        <span class="{{ $iconoZona }}" aria-hidden="true">
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" class="size-7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" focusable="false">{!! $iconos['documento'] !!}</svg>
+                        </span>
+                        <label for="contenido-texto" class="{{ $tituloZona }}">{{ __('Pegá el mensaje que te llegó') }}</label>
+                        <p id="texto-ayuda" class="{{ $ayudaZona }}">{{ __('WhatsApp, SMS o email. Copialo completo, tal como lo recibiste.') }}</p>
                         <textarea
                             id="contenido-texto"
                             wire:model="contenido"
                             rows="5"
                             required
                             placeholder="{{ __('Pegá acá el mensaje de WhatsApp, SMS o email') }}"
-                            @error('contenido') aria-invalid="true" aria-describedby="analisis-errores" @enderror
+                            aria-describedby="texto-ayuda @error('contenido') analisis-errores @enderror"
+                            @error('contenido') aria-invalid="true" @enderror
                             class="{{ $claseCampo }}"
                         ></textarea>
                     </div>
                 @elseif ($tipo === 'link')
-                    <div class="flex flex-col gap-2">
-                        <label for="contenido-link" class="text-sm font-medium text-neutral-800">{{ __('Link') }}</label>
+                    <div class="{{ $zona }}">
+                        <span class="{{ $iconoZona }}" aria-hidden="true">
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" class="size-7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" focusable="false">{!! $iconos['link'] !!}</svg>
+                        </span>
+                        <label for="contenido-link" class="{{ $tituloZona }}">{{ __('Pegá el link que querés revisar') }}</label>
+                        <p id="link-ayuda" class="{{ $ayudaZona }}">{{ __('No lo abras: pegalo acá y lo revisamos antes.') }}</p>
                         <input
                             id="contenido-link"
                             type="url"
@@ -357,7 +411,8 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
                             required
                             autocomplete="off"
                             placeholder="https://ejemplo.com"
-                            @error('contenido') aria-invalid="true" aria-describedby="analisis-errores" @enderror
+                            aria-describedby="link-ayuda @error('contenido') analisis-errores @enderror"
+                            @error('contenido') aria-invalid="true" @enderror
                             class="{{ $claseCampo }}"
                         />
                     </div>
@@ -366,8 +421,8 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
                     <div
                         x-data="{
                             estado: '',
-                            async leer(evento) {
-                                const archivo = evento.target.files[0];
+                            arrastrando: false,
+                            async leer(archivo) {
                                 this.$wire.contenido = '';
 
                                 if (! archivo) {
@@ -388,16 +443,31 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
                         }"
                         class="flex flex-col gap-2"
                     >
-                        <label for="archivo-qr" class="text-sm font-medium text-neutral-800">{{ __('Foto del código QR') }}</label>
-                        <input
-                            id="archivo-qr"
-                            type="file"
-                            accept="image/*"
-                            x-on:change="leer($event)"
-                            aria-describedby="qr-ayuda qr-estado"
-                            @error('contenido') aria-invalid="true" @enderror
-                            class="block w-full text-sm text-neutral-700 file:mr-3 file:rounded-md file:border-0 file:bg-[#12151a] file:px-4 file:py-2 file:text-sm file:font-medium file:text-white hover:file:bg-neutral-800"
-                        />
+                        <label
+                            for="archivo-qr"
+                            x-on:dragover.prevent="arrastrando = true"
+                            x-on:dragleave.prevent="arrastrando = false"
+                            x-on:drop.prevent="arrastrando = false; leer($event.dataTransfer.files[0])"
+                            :class="arrastrando && 'border-[#16a34a] bg-[#16a34a]/5'"
+                            class="{{ $zona }} cursor-pointer hover:border-[#16a34a] focus-within:ring-2 focus-within:ring-[#16a34a]/40"
+                        >
+                            <span class="{{ $iconoZona }}" aria-hidden="true">
+                                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" class="size-7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" focusable="false">{!! $iconos['camara'] !!}</svg>
+                            </span>
+                            <span id="qr-titulo" class="{{ $tituloZona }}">{{ __('Subí la foto del código QR') }}</span>
+                            <span class="{{ $ayudaZona }}">{{ __('Arrastrala acá o tocá para elegirla. En el celular también podés sacarla con la cámara.') }}</span>
+                            <span class="mt-2 inline-flex rounded-md bg-[#12151a] px-4 py-2 text-sm font-medium text-white" aria-hidden="true">{{ __('Elegir foto') }}</span>
+                            <input
+                                id="archivo-qr"
+                                type="file"
+                                accept="image/*"
+                                x-on:change="leer($event.target.files[0])"
+                                aria-labelledby="qr-titulo"
+                                aria-describedby="qr-ayuda qr-estado"
+                                @error('contenido') aria-invalid="true" @enderror
+                                class="sr-only"
+                            />
+                        </label>
                         <p id="qr-ayuda" class="text-xs text-neutral-500">
                             {{ __('La imagen se procesa en tu dispositivo: no se sube a ningún servidor.') }}
                         </p>
@@ -421,22 +491,63 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
                     </div>
                 @endif
 
-                <button
-                    type="submit"
-                    wire:loading.attr="disabled"
-                    wire:target="analizar"
-                    data-test="analizar-button"
-                    class="flex w-full items-center justify-center gap-2 rounded-md bg-[#22c55e] px-4 py-2.5 font-semibold text-[#12151a] transition hover:bg-[#16a34a] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#16a34a] focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-70 sm:w-auto sm:self-end"
-                >
-                    <span wire:loading.remove wire:target="analizar">{{ __('Analizar') }}</span>
-                    <span wire:loading.flex wire:target="analizar" class="items-center gap-2">
-                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" class="size-4 animate-spin" fill="none" aria-hidden="true" focusable="false">
-                            <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" class="opacity-25" />
-                            <path fill="currentColor" d="M4 12a8 8 0 0 1 8-8v4a4 4 0 0 0-4 4H4Z" class="opacity-75" />
-                        </svg>
-                        {{ __('Analizando…') }}
-                    </span>
-                </button>
+                <div class="flex flex-col-reverse gap-3 sm:flex-row sm:items-center sm:justify-end">
+                    @if ($tipo !== 'qr')
+                        <button
+                            type="button"
+                            x-on:click="ejemplosAbiertos = ! ejemplosAbiertos"
+                            :aria-expanded="ejemplosAbiertos.toString()"
+                            aria-expanded="false"
+                            aria-controls="ejemplos"
+                            data-test="ver-ejemplos-button"
+                            class="rounded-md border border-neutral-300 bg-white px-4 py-2.5 text-sm font-medium text-neutral-800 transition hover:border-[#16a34a] hover:text-[#15803d] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#16a34a] focus-visible:ring-offset-2"
+                        >
+                            {{ __('Ver ejemplos') }}
+                        </button>
+                    @endif
+
+                    <button
+                        type="submit"
+                        wire:loading.attr="disabled"
+                        wire:target="analizar"
+                        data-test="analizar-button"
+                        class="flex w-full items-center justify-center gap-2 rounded-md bg-[#22c55e] px-4 py-2.5 font-semibold text-[#12151a] transition hover:bg-[#16a34a] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#16a34a] focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-70 sm:w-auto"
+                    >
+                        <span wire:loading.remove wire:target="analizar">{{ __('Analizar') }}</span>
+                        <span wire:loading.flex wire:target="analizar" class="items-center gap-2">
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" class="size-4 animate-spin" fill="none" aria-hidden="true" focusable="false">
+                                <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" class="opacity-25" />
+                                <path fill="currentColor" d="M4 12a8 8 0 0 1 8-8v4a4 4 0 0 0-4 4H4Z" class="opacity-75" />
+                            </svg>
+                            {{ __('Analizando…') }}
+                        </span>
+                    </button>
+                </div>
+
+                @if ($tipo !== 'qr')
+                    <div id="ejemplos" x-show="ejemplosAbiertos" x-cloak class="rounded-lg border border-neutral-200 bg-neutral-50 p-4">
+                        <p class="text-sm font-semibold text-neutral-900">{{ __('Ejemplos de estafas comunes') }}</p>
+                        <p class="mt-1 text-xs text-neutral-500">{{ __('Son ejemplos inventados a partir de patrones reales. Elegí uno para cargarlo y después tocá Analizar.') }}</p>
+
+                        <ul class="mt-3 flex flex-col gap-2">
+                            @foreach ($ejemplos[$tipo] as $ejemplo)
+                                <li class="flex flex-col gap-2 rounded-md border border-neutral-200 bg-white p-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+                                    <div class="min-w-0">
+                                        <p class="text-xs font-semibold uppercase tracking-wide text-neutral-500">{{ $ejemplo['titulo'] }}</p>
+                                        <p class="mt-1 break-words font-mono text-sm text-neutral-800">{{ $ejemplo['contenido'] }}</p>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        x-on:click="usar(@js($ejemplo['contenido']), @js($tipo === 'link' ? 'contenido-link' : 'contenido-texto'))"
+                                        class="shrink-0 self-start rounded-md px-3 py-1.5 text-sm font-medium text-[#15803d] hover:bg-[#16a34a]/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#16a34a] sm:self-center"
+                                    >
+                                        {{ __('Usar este ejemplo') }}
+                                    </button>
+                                </li>
+                            @endforeach
+                        </ul>
+                    </div>
+                @endif
             </form>
         </div>
     </section>

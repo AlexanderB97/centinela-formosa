@@ -39,6 +39,16 @@
             {{ $slot }}
         </main>
 
+        <footer class="bg-[#12151a]">
+            <p class="mx-auto flex w-full max-w-3xl flex-wrap items-center justify-center gap-x-2 gap-y-1 px-4 py-5 text-center text-xs text-neutral-400 sm:px-6 sm:text-sm">
+                <span class="font-medium text-neutral-200">Centinela Formosa</span>
+                <span aria-hidden="true">·</span>
+                <span>Formosa Hack 2026</span>
+                <span aria-hidden="true">·</span>
+                <span>{{ __('Herramienta educativa de seguridad digital') }}</span>
+            </p>
+        </footer>
+
         @livewireScripts
     </body>
 </html>
