@@ -8,6 +8,7 @@ use App\Services\Analisis\ResultadoAnalisis;
 use App\Services\RiskAnalyzer;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Schema;
 
 beforeEach(function () {
     Http::preventStrayRequests();
@@ -42,7 +43,7 @@ test('it is resolvable from the container and returns the contract shape', funct
     $resultado = analizador()->analizar('texto', 'Hola, ¿cómo estás?');
 
     expect($resultado)->toBeInstanceOf(ResultadoAnalisis::class)
-        ->and($resultado->toArray())->toHaveKeys(['nivel', 'razones', 'explicacion', 'explicacion_generada_por_ia'])
+        ->and($resultado->toArray())->toHaveKeys(['nivel', 'razones', 'explicacion', 'explicacion_generada_por_ia', 'analisis_id'])
         ->and($resultado->toArray()['nivel'])->toBe('seguro')
         ->and($resultado->toArray()['razones'])->toBe(['No se detectaron patrones típicos de estafa.']);
 });
@@ -235,4 +236,24 @@ test('every analysis is stored', function () {
         ->and($analisis->razones)->toBe(['Usa un acortador de enlaces que oculta el destino real.'])
         ->and($analisis->explicacion)->toBe(NivelRiesgo::Dudoso->explicacionDeRespaldo())
         ->and($analisis->explicacion_generada_por_ia)->toBeFalse();
+});
+
+test('it returns the id of the stored analysis', function () {
+    $resultado = analizador()->analizar('texto', 'Nos vemos mañana a las 18 en la plaza');
+
+    expect($resultado->analisisId)->not->toBeNull()
+        ->and($resultado->analisisId)->toBe(Analisis::sole()->id)
+        ->and($resultado->toArray()['analisis_id'])->toBe($resultado->analisisId);
+
+    expect(analizador()->analizar('texto', 'otro mensaje')->analisisId)->not->toBe($resultado->analisisId);
+});
+
+test('if storing fails the result is still returned with a null id', function () {
+    Schema::drop('analisis');
+
+    $resultado = analizador()->analizar('texto', 'Nos vemos mañana a las 18 en la plaza');
+
+    expect($resultado->nivel)->toBe(NivelRiesgo::Seguro)
+        ->and($resultado->analisisId)->toBeNull()
+        ->and($resultado->toArray())->toHaveKey('analisis_id', null);
 });

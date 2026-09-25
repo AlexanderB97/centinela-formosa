@@ -1,5 +1,7 @@
 <?php
 
+use App\Models\Analisis;
+use App\Services\RiskAnalyzer;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 use Livewire\Attributes\Layout;
@@ -12,23 +14,16 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
     public string $contenido = '';
 
     /**
-     * Resultado con la forma del contrato de POST /analizar, más `analisis_id`
-     * (que el contrato de HU2.1 todavía no incluye y HU2.2 necesita para reportar):
-     * { nivel: 'seguro'|'dudoso'|'riesgo', razones: string[], explicacion: string, explicacion_generada_por_ia: bool, analisis_id: int }
+     * Resultado de RiskAnalyzer, con la forma del contrato de POST /analizar:
+     * { nivel: 'seguro'|'dudoso'|'riesgo', razones: string[], explicacion: string, explicacion_generada_por_ia: bool, analisis_id: int|null }
+     * `analisis_id` es null si backend no pudo guardar el análisis; en ese caso no se puede reportar.
      *
-     * @var array{nivel: string, razones: array<int, string>, explicacion: string, explicacion_generada_por_ia: bool, analisis_id: int}|null
+     * @var array{nivel: string, razones: array<int, string>, explicacion: string, explicacion_generada_por_ia: bool, analisis_id: int|null}|null
      */
     #[Locked]
     public ?array $resultado = null;
 
     public bool $error = false;
-
-    /**
-     * MOCK: contador en memoria para simular el ID del análisis. Backend lo reemplaza por el ID
-     * real de la fila persistida en `analisis` cuando exista la migración de HU2.1-BACK.
-     */
-    #[Locked]
-    public int $proximoAnalisisId = 1;
 
     /**
      * MOCK: IDs ya reportados en esta visita, para simular el 422 de "ya reportado".
@@ -78,14 +73,8 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
         ]);
 
         try {
-            // TODO: backend reemplaza esta llamada por el servicio/acción real de análisis
-            // (la misma lógica que usa POST /analizar), que devuelve este mismo array.
-            $this->resultado = [
-                ...$this->analizarMock($this->contenido),
-                // MOCK: ID simulado con el contador en memoria; solo avanza cuando hay resultado.
-                // Backend lo reemplaza por el ID real de la fila persistida en `analisis` (HU2.1-BACK).
-                'analisis_id' => $this->proximoAnalisisId++,
-            ];
+            // Misma lógica que POST /analizar; incluye el analisis_id real de la fila guardada.
+            $this->resultado = app(RiskAnalyzer::class)->analizar($this->tipo, $this->contenido)->toArray();
         } catch (Throwable $e) {
             report($e);
             $this->error = true;
@@ -94,7 +83,7 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
 
     public function abrirReporte(): void
     {
-        if ($this->resultado === null) {
+        if ($this->resultado === null || $this->resultado['analisis_id'] === null) {
             return;
         }
 
@@ -156,8 +145,8 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
             throw new RuntimeException('MOCK: error simulado del reporte.');
         }
 
-        // MOCK: 422 por analisis_id inexistente.
-        if ($analisisId < 1 || $analisisId >= $this->proximoAnalisisId) {
+        // MOCK: 422 por analisis_id inexistente, ahora contra la tabla real `analisis`.
+        if (! Analisis::whereKey($analisisId)->exists()) {
             return [422, 'No encontramos este análisis. Probá analizarlo de nuevo.'];
         }
 
@@ -172,6 +161,7 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
         return [201, '¡Gracias! Tu reporte fue enviado de forma anónima.'];
     }
 
+    // DEPRECATED: ya no se usa, RiskAnalyzer real lo reemplaza. Se deja como referencia.
     /**
      * MOCK: simula el análisis en memoria con palabras clave simples, solo para maquetar.
      * Backend lo reemplaza por el análisis real (VirusTotal/Gemini); nada de esto es definitivo.
@@ -532,6 +522,8 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
                         <h3 class="mt-6 text-sm font-semibold text-neutral-900">{{ __('Explicación') }}</h3>
                         <p class="mt-2 text-neutral-800">{{ $resultado['explicacion'] }}</p>
 
+                        {{-- Sin analisis_id (backend no pudo guardar el análisis) no hay nada que reportar. --}}
+                        @if ($resultado['analisis_id'] !== null)
                         <div class="mt-6 border-t border-neutral-200 pt-4">
                             <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                                 <p class="text-sm text-neutral-600">
@@ -656,6 +648,7 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
                                 </section>
                             @endif
                         </div>
+                        @endif
                     </article>
                 @endif
             </div>

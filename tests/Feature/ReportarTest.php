@@ -1,7 +1,16 @@
 <?php
 
+use App\Enums\NivelRiesgo;
+use App\Models\Analisis;
+use App\Services\Analisis\ResultadoAnalisis;
+use App\Services\RiskAnalyzer;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
 use Livewire\Livewire;
+
+beforeEach(function () {
+    Http::preventStrayRequests();
+});
 
 function analizarAlgo(string $contenido = 'Ganaste un premio, urgente')
 {
@@ -10,22 +19,33 @@ function analizarAlgo(string $contenido = 'Ganaste un premio, urgente')
         ->call('analizar');
 }
 
-test('each new analysis gets an incremental mock analisis_id', function () {
+test('the analisis_id is the id of the stored analysis', function () {
     $component = analizarAlgo();
-    expect($component->get('resultado.analisis_id'))->toBe(1);
+    $primero = $component->get('resultado.analisis_id');
+
+    expect($primero)->toBe(Analisis::sole()->id);
 
     $component->call('analizar');
-    expect($component->get('resultado.analisis_id'))->toBe(2);
+
+    expect($component->get('resultado.analisis_id'))
+        ->not->toBe($primero)
+        ->toBe(Analisis::latest('id')->value('id'));
 });
 
-test('failed analyses do not consume an analisis_id', function () {
-    $component = Livewire::test('pages::analizador')
-        ->set('contenido', 'simular-error')
-        ->call('analizar')
-        ->set('contenido', 'Hola')
-        ->call('analizar');
+test('without an analisis_id the report cannot be opened', function () {
+    $this->mock(RiskAnalyzer::class)->shouldReceive('analizar')->andReturn(new ResultadoAnalisis(
+        nivel: NivelRiesgo::Riesgo,
+        razones: ['Pide datos sensibles como claves o códigos.'],
+        explicacion: 'Explicación de prueba.',
+        explicacionGeneradaPorIa: false,
+        analisisId: null,
+    ));
 
-    expect($component->get('resultado.analisis_id'))->toBe(1);
+    analizarAlgo()
+        ->assertSet('resultado.nivel', 'riesgo')
+        ->assertDontSeeHtml('data-test="reportar-button"')
+        ->call('abrirReporte')
+        ->assertSet('reporteAbierto', false);
 });
 
 test('the report section opens from the result', function () {
@@ -61,7 +81,7 @@ test('sending a report with a comment shows a confirmation', function () {
         ->assertSet('tipoAviso', 'exito')
         ->assertSet('reporteAbierto', false)
         ->assertSet('comentario', '')
-        ->assertSet('analisisReportados', [1])
+        ->assertSet('analisisReportados', [Analisis::sole()->id])
         ->assertSee('¡Gracias! Tu reporte fue enviado de forma anónima.')
         ->assertSee('data-aviso="exito"', false);
 });
@@ -83,7 +103,7 @@ test('reporting the same analysis twice shows a friendly already reported notice
         ->set('comentario', 'Otra vez')
         ->call('reportar')
         ->assertSet('tipoAviso', 'aviso')
-        ->assertSet('analisisReportados', [1])
+        ->assertSet('analisisReportados', [Analisis::sole()->id])
         ->assertSee('Ya reportaste este análisis, gracias.')
         ->assertSee('data-aviso="aviso"', false)
         ->assertDontSee('bg-red-50', false);
@@ -97,7 +117,7 @@ test('a new analysis can be reported after reporting a previous one', function (
         ->call('abrirReporte')
         ->call('reportar')
         ->assertSet('tipoAviso', 'exito')
-        ->assertSet('analisisReportados', [1, 2]);
+        ->assertSet('analisisReportados', Analisis::orderBy('id')->pluck('id')->all());
 });
 
 test('a failed report keeps the comment and shows a calm message', function () {

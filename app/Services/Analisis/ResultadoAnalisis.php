@@ -22,10 +22,12 @@ final readonly class ResultadoAnalisis implements Arrayable, JsonSerializable
         public array $razones,
         public string $explicacion,
         public bool $explicacionGeneradaPorIa,
+        // Null when RiskAnalyzer could not store the analysis.
+        public ?int $analisisId,
     ) {}
 
     /**
-     * @return array{nivel: string, razones: list<string>, explicacion: string, explicacion_generada_por_ia: bool}
+     * @return array{nivel: string, razones: list<string>, explicacion: string, explicacion_generada_por_ia: bool, analisis_id: int|null}
      */
     public function toArray(): array
     {
@@ -34,11 +36,12 @@ final readonly class ResultadoAnalisis implements Arrayable, JsonSerializable
             'razones' => $this->razones,
             'explicacion' => $this->explicacion,
             'explicacion_generada_por_ia' => $this->explicacionGeneradaPorIa,
+            'analisis_id' => $this->analisisId,
         ];
     }
 
     /**
-     * @return array{nivel: string, razones: list<string>, explicacion: string, explicacion_generada_por_ia: bool}
+     * @return array{nivel: string, razones: list<string>, explicacion: string, explicacion_generada_por_ia: bool, analisis_id: int|null}
      */
     public function jsonSerialize(): array
     {

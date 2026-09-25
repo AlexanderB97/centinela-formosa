@@ -67,17 +67,16 @@ class RiskAnalyzer
 
         $razones = $this->razones($senales);
         $explicacionIa = $this->gemini->redactarExplicacion($nivel, $razones);
+        $explicacion = $explicacionIa ?? $nivel->explicacionDeRespaldo();
+        $generadaPorIa = $explicacionIa !== null;
 
-        $resultado = new ResultadoAnalisis(
+        return new ResultadoAnalisis(
             nivel: $nivel,
             razones: $razones,
-            explicacion: $explicacionIa ?? $nivel->explicacionDeRespaldo(),
-            explicacionGeneradaPorIa: $explicacionIa !== null,
+            explicacion: $explicacion,
+            explicacionGeneradaPorIa: $generadaPorIa,
+            analisisId: $this->guardar($tipo, $contenido, $nivel, $razones, $explicacion, $generadaPorIa),
         );
-
-        $this->guardar($tipo, $contenido, $resultado);
-
-        return $resultado;
     }
 
     /**
@@ -157,20 +156,27 @@ class RiskAnalyzer
         return array_values(array_unique($razones));
     }
 
-    private function guardar(TipoContenido $tipo, string $contenido, ResultadoAnalisis $resultado): void
+    /**
+     * Store the analysis and return its id, or null if it could not be stored.
+     *
+     * @param  list<string>  $razones
+     */
+    private function guardar(TipoContenido $tipo, string $contenido, NivelRiesgo $nivel, array $razones, string $explicacion, bool $generadaPorIa): ?int
     {
         try {
-            Analisis::create([
+            return Analisis::create([
                 'tipo' => $tipo,
                 'contenido' => $contenido,
-                'nivel' => $resultado->nivel,
-                'razones' => $resultado->razones,
-                'explicacion' => $resultado->explicacion,
-                'explicacion_generada_por_ia' => $resultado->explicacionGeneradaPorIa,
-            ]);
+                'nivel' => $nivel,
+                'razones' => $razones,
+                'explicacion' => $explicacion,
+                'explicacion_generada_por_ia' => $generadaPorIa,
+            ])->id;
         } catch (Throwable $e) {
             // Failing to log the analysis must not deny the citizen their result.
             report($e);
+
+            return null;
         }
     }
 }

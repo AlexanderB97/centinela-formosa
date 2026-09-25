@@ -1,6 +1,12 @@
 <?php
 
+use App\Services\RiskAnalyzer;
+use Illuminate\Support\Facades\Http;
 use Livewire\Livewire;
+
+beforeEach(function () {
+    Http::preventStrayRequests();
+});
 
 test('analizador page can be rendered without authentication', function () {
     $this->get(route('analizar'))
@@ -108,6 +114,8 @@ test('qr tab asks for a photo when nothing was decoded', function () {
 });
 
 test('analysis failure shows an error with a retry option', function () {
+    $this->mock(RiskAnalyzer::class)->shouldReceive('analizar')->andThrow(new RuntimeException('Falla simulada'));
+
     Livewire::test('pages::analizador')
         ->set('contenido', 'simular-error')
         ->call('analizar')

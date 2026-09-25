@@ -14,10 +14,9 @@ test('guests can analyze content through the api', function () {
         'contenido' => 'URGENTE: tu cuenta del Banco fue suspendida, verificá tu cuenta',
     ])
         ->assertOk()
-        ->assertExactJsonStructure(['nivel', 'razones', 'explicacion', 'explicacion_generada_por_ia'])
-        ->assertJson(['nivel' => 'riesgo', 'explicacion_generada_por_ia' => false]);
-
-    expect(Analisis::count())->toBe(1);
+        ->assertExactJsonStructure(['nivel', 'razones', 'explicacion', 'explicacion_generada_por_ia', 'analisis_id'])
+        ->assertJson(['nivel' => 'riesgo', 'explicacion_generada_por_ia' => false])
+        ->assertJsonPath('analisis_id', Analisis::sole()->id);
 });
 
 test('validation errors are json even without an accept header', function () {
