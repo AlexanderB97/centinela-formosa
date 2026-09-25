@@ -35,4 +35,19 @@ return [
         ],
     ],
 
+    'virustotal' => [
+        'key' => env('VIRUSTOTAL_API_KEY'),
+        'timeout' => (int) env('VIRUSTOTAL_TIMEOUT', 3),
+        // Tope de links por análisis: el plan gratuito de VirusTotal permite 4 consultas por minuto.
+        'max_urls' => (int) env('VIRUSTOTAL_MAX_URLS', 2),
+        'cache_ttl' => (int) env('VIRUSTOTAL_CACHE_TTL', 3600),
+    ],
+
+    'gemini' => [
+        'key' => env('GEMINI_API_KEY'),
+        'model' => env('GEMINI_MODEL', 'gemini-flash-lite-latest'),
+        'timeout' => (int) env('GEMINI_TIMEOUT', 15
+        ),
+    ],
+
 ];
