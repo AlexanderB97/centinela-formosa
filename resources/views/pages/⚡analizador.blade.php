@@ -3,6 +3,7 @@
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 use Livewire\Attributes\Layout;
+use Livewire\Attributes\Locked;
 use Livewire\Attributes\Title;
 use Livewire\Component;
 
@@ -11,14 +12,39 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
     public string $contenido = '';
 
     /**
-     * Resultado con la forma exacta del contrato de POST /analizar:
-     * { nivel: 'seguro'|'dudoso'|'riesgo', razones: string[], explicacion: string, explicacion_generada_por_ia: bool }
+     * Resultado con la forma del contrato de POST /analizar, más `analisis_id`
+     * (que el contrato de HU2.1 todavía no incluye y HU2.2 necesita para reportar):
+     * { nivel: 'seguro'|'dudoso'|'riesgo', razones: string[], explicacion: string, explicacion_generada_por_ia: bool, analisis_id: int }
      *
-     * @var array{nivel: string, razones: array<int, string>, explicacion: string, explicacion_generada_por_ia: bool}|null
+     * @var array{nivel: string, razones: array<int, string>, explicacion: string, explicacion_generada_por_ia: bool, analisis_id: int}|null
      */
+    #[Locked]
     public ?array $resultado = null;
 
     public bool $error = false;
+
+    /**
+     * MOCK: contador en memoria para simular el ID del análisis. Backend lo reemplaza por el ID
+     * real de la fila persistida en `analisis` cuando exista la migración de HU2.1-BACK.
+     */
+    #[Locked]
+    public int $proximoAnalisisId = 1;
+
+    /**
+     * MOCK: IDs ya reportados en esta visita, para simular el 422 de "ya reportado".
+     * Backend lo reemplaza por POST /reportar real y define la política de deduplicación.
+     *
+     * @var array<int, int>
+     */
+    #[Locked]
+    public array $analisisReportados = [];
+
+    public bool $reporteAbierto = false;
+    public string $comentario = '';
+
+    /** Mensaje del último reporte y su tipo: 'exito' (201), 'aviso' (422) o 'error' (falla del envío). */
+    public ?string $avisoReporte = null;
+    public ?string $tipoAviso = null;
 
     public function seleccionarTipo(string $tipo): void
     {
@@ -27,13 +53,13 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
         }
 
         $this->tipo = $tipo;
-        $this->reset('contenido', 'resultado', 'error');
+        $this->reset('contenido', 'resultado', 'error', 'reporteAbierto', 'comentario', 'avisoReporte', 'tipoAviso');
         $this->resetValidation();
     }
 
     public function analizar(): void
     {
-        $this->reset('resultado', 'error');
+        $this->reset('resultado', 'error', 'reporteAbierto', 'comentario', 'avisoReporte', 'tipoAviso');
 
         // MOCK: reglas que imitan el 422 del contrato. Backend define las definitivas.
         $this->validate([
@@ -54,16 +80,96 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
         try {
             // TODO: backend reemplaza esta llamada por el servicio/acción real de análisis
             // (la misma lógica que usa POST /analizar), que devuelve este mismo array.
-            $this->resultado = $this->analizarMock($this->contenido);
+            $this->resultado = [
+                ...$this->analizarMock($this->contenido),
+                // MOCK: ID simulado con el contador en memoria; solo avanza cuando hay resultado.
+                // Backend lo reemplaza por el ID real de la fila persistida en `analisis` (HU2.1-BACK).
+                'analisis_id' => $this->proximoAnalisisId++,
+            ];
         } catch (Throwable $e) {
             report($e);
             $this->error = true;
         }
     }
 
+    public function abrirReporte(): void
+    {
+        if ($this->resultado === null) {
+            return;
+        }
+
+        $this->reporteAbierto = true;
+        $this->reset('comentario', 'avisoReporte', 'tipoAviso');
+        $this->resetValidation('comentario');
+    }
+
+    public function cerrarReporte(): void
+    {
+        $this->reset('reporteAbierto', 'comentario', 'avisoReporte', 'tipoAviso');
+        $this->resetValidation('comentario');
+    }
+
     public function reportar(): void
     {
-        // TODO: HU2.2 — conectar con el flujo de reporte (issue aparte). Por ahora no hace nada.
+        if ($this->resultado === null) {
+            return;
+        }
+
+        // MOCK: regla que imita el 422 del contrato. Backend define el límite real.
+        $this->validate(
+            ['comentario' => ['nullable', 'string', 'max:500']],
+            ['comentario.max' => 'El comentario no puede superar los 500 caracteres.'],
+        );
+
+        try {
+            // TODO: backend reemplaza esta llamada por POST /reportar real
+            // con { analisis_id, comentario? }. Sin datos del visitante.
+            [$estado, $mensaje] = $this->reportarMock($this->resultado['analisis_id'], trim($this->comentario) ?: null);
+        } catch (Throwable $e) {
+            report($e);
+            $this->tipoAviso = 'error';
+            $this->avisoReporte = null;
+
+            return;
+        }
+
+        $this->tipoAviso = $estado === 201 ? 'exito' : 'aviso';
+        $this->avisoReporte = $mensaje;
+        $this->reset('reporteAbierto', 'comentario');
+    }
+
+    /**
+     * MOCK: simula POST /reportar en memoria. Backend lo reemplaza por el endpoint real.
+     * Devuelve [status, mensaje] imitando el 201 { mensaje } y los 422 del contrato.
+     *
+     * @return array{0: int, 1: string}
+     */
+    private function reportarMock(int $analisisId, ?string $comentario): array
+    {
+        // MOCK: demora artificial más corta que la del análisis.
+        if (! app()->runningUnitTests()) {
+            usleep(random_int(300, 600) * 1000);
+        }
+
+        // MOCK: palabra clave en el comentario para probar la falla del envío.
+        if ($comentario !== null && str_contains(Str::lower($comentario), 'simular-error')) {
+            throw new RuntimeException('MOCK: error simulado del reporte.');
+        }
+
+        // MOCK: 422 por analisis_id inexistente.
+        if ($analisisId < 1 || $analisisId >= $this->proximoAnalisisId) {
+            return [422, 'No encontramos este análisis. Probá analizarlo de nuevo.'];
+        }
+
+        // MOCK: 422 por "ya reportado". Decisión de UI solo para el mock; la política real la define backend.
+        if (in_array($analisisId, $this->analisisReportados, true)) {
+            return [422, 'Ya reportaste este análisis, gracias.'];
+        }
+
+        // MOCK: el reporte no se persiste; el comentario se descarta.
+        $this->analisisReportados[] = $analisisId;
+
+        return [201, '¡Gracias! Tu reporte fue enviado de forma anónima.'];
     }
 
     /**
@@ -305,9 +411,9 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
                     </div>
                 @endif
 
-                @if ($errors->any())
+                @if ($errors->hasAny(['tipo', 'contenido']))
                     <div id="analisis-errores" role="alert" class="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-                        {{ $errors->first() }}
+                        {{ $errors->first('contenido') ?: $errors->first('tipo') }}
                     </div>
                 @endif
 
@@ -426,23 +532,129 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
                         <h3 class="mt-6 text-sm font-semibold text-neutral-900">{{ __('Explicación') }}</h3>
                         <p class="mt-2 text-neutral-800">{{ $resultado['explicacion'] }}</p>
 
-                        <div class="mt-6 flex flex-col gap-3 border-t border-neutral-200 pt-4 sm:flex-row sm:items-center sm:justify-between">
-                            <p class="text-sm text-neutral-600">
-                                {{ $nivel === 'seguro' ? __('¿Creés que igual es una estafa?') : __('¿Te llegó esto? Reportalo y ayudá a otros.') }}
-                            </p>
-                            {{-- TODO: HU2.2 — el reporte es otro issue; por ahora wire:click="reportar" no hace nada. --}}
-                            <button
-                                type="button"
-                                wire:click="reportar"
-                                data-test="reportar-button"
-                                @class([
-                                    'rounded-md px-4 py-2 text-sm font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-[#16a34a] focus-visible:ring-offset-2',
-                                    'bg-[#12151a] text-white hover:bg-neutral-800' => $nivel !== 'seguro',
-                                    'border border-neutral-300 text-neutral-800 hover:bg-neutral-50' => $nivel === 'seguro',
-                                ])
-                            >
-                                {{ __('Reportar') }}
-                            </button>
+                        <div class="mt-6 border-t border-neutral-200 pt-4">
+                            <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                                <p class="text-sm text-neutral-600">
+                                    {{ $nivel === 'seguro' ? __('¿Creés que igual es una estafa?') : __('¿Te llegó esto? Reportalo y ayudá a otros.') }}
+                                </p>
+                                <button
+                                    type="button"
+                                    id="reportar-boton"
+                                    wire:click="{{ $reporteAbierto ? 'cerrarReporte' : 'abrirReporte' }}"
+                                    aria-expanded="{{ $reporteAbierto ? 'true' : 'false' }}"
+                                    aria-controls="seccion-reporte"
+                                    data-test="reportar-button"
+                                    @class([
+                                        'rounded-md px-4 py-2 text-sm font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-[#16a34a] focus-visible:ring-offset-2',
+                                        'bg-[#12151a] text-white hover:bg-neutral-800' => $nivel !== 'seguro',
+                                        'border border-neutral-300 text-neutral-800 hover:bg-neutral-50' => $nivel === 'seguro',
+                                    ])
+                                >
+                                    {{ __('Reportar') }}
+                                </button>
+                            </div>
+
+                            {{-- Resultado del último reporte (201 o 422): tono calmo, nunca en rojo. --}}
+                            @if ($avisoReporte && in_array($tipoAviso, ['exito', 'aviso'], true))
+                                <div
+                                    role="status"
+                                    tabindex="-1"
+                                    x-init="$nextTick(() => $el.focus())"
+                                    data-aviso="{{ $tipoAviso }}"
+                                    @class([
+                                        'mt-4 flex items-start gap-3 rounded-md border px-4 py-3 text-sm focus:outline-none',
+                                        'border-green-200 bg-green-50 text-green-900' => $tipoAviso === 'exito',
+                                        'border-sky-200 bg-sky-50 text-sky-900' => $tipoAviso === 'aviso',
+                                    ])
+                                >
+                                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" class="mt-0.5 size-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+                                        @if ($tipoAviso === 'exito')
+                                            <path d="m5 12.5 4.5 4.5L19 7.5" />
+                                        @else
+                                            <circle cx="12" cy="12" r="9" />
+                                            <path d="M12 11v5M12 8h.01" />
+                                        @endif
+                                    </svg>
+                                    <p>{{ $avisoReporte }}</p>
+                                </div>
+                            @endif
+
+                            @if ($reporteAbierto)
+                                {{-- Reporte anónimo: el único campo es el comentario opcional. No pedir datos personales. --}}
+                                <section
+                                    id="seccion-reporte"
+                                    aria-labelledby="reporte-titulo"
+                                    x-data="{
+                                        errorRed: false,
+                                        cerrar() {
+                                            this.$wire.cerrarReporte().then(() => document.getElementById('reportar-boton')?.focus());
+                                        },
+                                    }"
+                                    x-init="$nextTick(() => $refs.comentario.focus())"
+                                    x-on:reporte-error.window="errorRed = true"
+                                    x-on:keydown.escape.prevent.stop="cerrar()"
+                                    class="mt-4 rounded-lg border border-neutral-200 bg-neutral-50 p-4"
+                                >
+                                    <h3 id="reporte-titulo" class="font-medium text-neutral-900">{{ __('Reportar este contenido') }}</h3>
+                                    <p class="mt-1 text-sm text-neutral-600">
+                                        {{ __('El reporte es anónimo: no te pedimos ningún dato tuyo.') }}
+                                    </p>
+
+                                    <form wire:submit="reportar" x-on:submit="errorRed = false" class="mt-3 flex flex-col gap-3">
+                                        <div class="flex flex-col gap-2">
+                                            <label for="comentario-reporte" class="text-sm font-medium text-neutral-800">{{ __('Comentario (opcional)') }}</label>
+                                            <textarea
+                                                id="comentario-reporte"
+                                                x-ref="comentario"
+                                                wire:model="comentario"
+                                                rows="3"
+                                                maxlength="500"
+                                                placeholder="{{ __('Por ejemplo: me llegó por WhatsApp de un número desconocido') }}"
+                                                aria-describedby="comentario-ayuda @error('comentario') comentario-error @enderror"
+                                                @error('comentario') aria-invalid="true" @enderror
+                                                class="w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-neutral-900 placeholder:text-neutral-400 focus:border-[#16a34a] focus:outline-none focus:ring-2 focus:ring-[#16a34a]/40"
+                                            ></textarea>
+                                            <p id="comentario-ayuda" class="text-xs text-neutral-500">
+                                                {{ __('No incluyas datos personales. Máximo 500 caracteres.') }}
+                                            </p>
+                                            @error('comentario')
+                                                <p id="comentario-error" class="text-sm text-red-700">{{ $message }}</p>
+                                            @enderror
+                                        </div>
+
+                                        {{-- Falla del envío (servidor o red): calmo, el comentario se conserva para reintentar. --}}
+                                        <div
+                                            x-show="errorRed || @js($tipoAviso === 'error')"
+                                            @if ($tipoAviso !== 'error') x-cloak @endif
+                                            role="status"
+                                            data-aviso="error"
+                                            class="rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-800"
+                                        >
+                                            {{ __('No pudimos enviar el reporte. Tu comentario sigue acá, probá de nuevo en un momento.') }}
+                                        </div>
+
+                                        <div class="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                                            <button
+                                                type="button"
+                                                x-on:click="cerrar()"
+                                                class="rounded-md border border-neutral-300 bg-white px-4 py-2 text-sm font-medium text-neutral-800 hover:bg-neutral-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#16a34a] focus-visible:ring-offset-2"
+                                            >
+                                                {{ __('Cancelar') }}
+                                            </button>
+                                            <button
+                                                type="submit"
+                                                wire:loading.attr="disabled"
+                                                wire:target="reportar"
+                                                data-test="enviar-reporte-button"
+                                                class="rounded-md bg-[#22c55e] px-4 py-2 text-sm font-semibold text-[#12151a] hover:bg-[#16a34a] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#16a34a] focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-70"
+                                            >
+                                                <span wire:loading.remove wire:target="reportar">{{ __('Enviar reporte') }}</span>
+                                                <span wire:loading wire:target="reportar">{{ __('Enviando…') }}</span>
+                                            </button>
+                                        </div>
+                                    </form>
+                                </section>
+                            @endif
                         </div>
                     </article>
                 @endif
@@ -466,6 +678,16 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
         });
 
         onFailure(() => window.dispatchEvent(new CustomEvent('analizador-error')));
+    });
+
+    // Lo mismo para el envío del reporte, pero con un aviso calmo dentro de la sección.
+    $wire.$intercept('reportar', ({ onError, onFailure }) => {
+        onError(({ preventDefault }) => {
+            preventDefault();
+            window.dispatchEvent(new CustomEvent('reporte-error'));
+        });
+
+        onFailure(() => window.dispatchEvent(new CustomEvent('reporte-error')));
     });
 </script>
 @endscript

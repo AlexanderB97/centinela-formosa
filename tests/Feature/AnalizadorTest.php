@@ -74,11 +74,12 @@ test('mock result follows the backend contract shape', function () {
         ->call('analizar')
         ->get('resultado');
 
-    expect($resultado)->toHaveKeys(['nivel', 'razones', 'explicacion', 'explicacion_generada_por_ia']);
+    expect($resultado)->toHaveKeys(['nivel', 'razones', 'explicacion', 'explicacion_generada_por_ia', 'analisis_id']);
     expect($resultado['nivel'])->toBeIn(['seguro', 'dudoso', 'riesgo']);
     expect($resultado['razones'])->toBeArray()->not->toBeEmpty();
     expect($resultado['explicacion'])->toBeString();
     expect($resultado['explicacion_generada_por_ia'])->toBeBool();
+    expect($resultado['analisis_id'])->toBeInt();
 });
 
 test('empty content shows a validation error', function () {
@@ -122,6 +123,6 @@ test('result offers a path to report', function () {
         ->set('contenido', 'Ganaste un sorteo')
         ->call('analizar')
         ->assertSee('data-test="reportar-button"', false)
-        ->call('reportar')
-        ->assertOk();
+        ->call('abrirReporte')
+        ->assertSet('reporteAbierto', true);
 });
