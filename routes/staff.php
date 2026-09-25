@@ -14,6 +14,9 @@ Route::prefix('staff')->name('staff.')->group(function () {
         Route::view('dashboard', 'pages::staff.dashboard')->name('dashboard');
         Route::post('logout', [LoginController::class, 'destroy'])->name('logout');
 
+        // Cola de moderación (HU2.3): cualquier staff, moderador o admin.
+        Route::livewire('reportes', 'pages::staff.reportes')->name('reportes');
+
         // Gestión de staff (HU1.2): solo admins; un moderador recibe 403.
         Route::middleware('admin.staff')->group(function () {
             Route::livewire('usuarios', 'pages::staff.usuarios')->name('usuarios');
