@@ -31,11 +31,14 @@ class AppServiceProvider extends ServiceProvider
     }
 
     /**
-     * Limit the public analyzer API, which consumes the VirusTotal and Gemini quotas.
+     * Limit the public analyzer API, which consumes the VirusTotal and Gemini quotas,
+     * and the public report API, so the moderation queue cannot be flooded.
+     * The IP only lives in the rate limiter cache; it is never stored with a report.
      */
     protected function configureRateLimiting(): void
     {
         RateLimiter::for('analizar', fn (Request $request) => Limit::perMinute(20)->by((string) $request->ip()));
+        RateLimiter::for('reportar', fn (Request $request) => Limit::perMinute(10)->by((string) $request->ip()));
     }
 
     /**

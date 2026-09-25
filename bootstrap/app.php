@@ -12,8 +12,8 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
-        // POST /analizar is a public anonymous API: no session form, so no CSRF token.
-        $middleware->validateCsrfTokens(except: ['analizar']);
+        // POST /analizar and POST /reportar are public anonymous APIs: no session form, so no CSRF token.
+        $middleware->validateCsrfTokens(except: ['analizar', 'reportar']);
 
         $middleware->redirectGuestsTo(
             fn (Request $request) => $request->is('staff', 'staff/*') ? route('staff.login') : route('login'),
@@ -26,6 +26,6 @@ return Application::configure(basePath: dirname(__DIR__))
     ->withExceptions(function (Exceptions $exceptions): void {
         $exceptions->shouldRenderJsonWhen(
             fn (Request $request) => $request->is('api/*') || $request->expectsJson()
-                || ($request->is('analizar') && $request->isMethod('POST')),
+                || ($request->is('analizar', 'reportar') && $request->isMethod('POST')),
         );
     })->create();

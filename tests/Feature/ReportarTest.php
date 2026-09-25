@@ -1,8 +1,12 @@
 <?php
 
+use App\Enums\EstadoReporte;
 use App\Enums\NivelRiesgo;
+use App\Http\Requests\ReportarRequest;
 use App\Models\Analisis;
+use App\Models\Reporte;
 use App\Services\Analisis\ResultadoAnalisis;
+use App\Services\ReportarAnalisis;
 use App\Services\RiskAnalyzer;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
@@ -68,12 +72,13 @@ test('the report section can be closed without sending', function () {
         ->set('comentario', 'algo')
         ->call('cerrarReporte')
         ->assertSet('reporteAbierto', false)
-        ->assertSet('comentario', '')
-        ->assertSet('analisisReportados', []);
+        ->assertSet('comentario', '');
+
+    expect(Reporte::count())->toBe(0);
 });
 
 test('sending a report with a comment shows a confirmation', function () {
-    analizarAlgo()
+    $component = analizarAlgo()
         ->call('abrirReporte')
         ->set('comentario', 'Me llegó por WhatsApp de un número desconocido')
         ->call('reportar')
@@ -81,9 +86,14 @@ test('sending a report with a comment shows a confirmation', function () {
         ->assertSet('tipoAviso', 'exito')
         ->assertSet('reporteAbierto', false)
         ->assertSet('comentario', '')
-        ->assertSet('analisisReportados', [Analisis::sole()->id])
         ->assertSee('¡Gracias! Tu reporte fue enviado de forma anónima.')
         ->assertSee('data-aviso="exito"', false);
+
+    $reporte = Reporte::sole();
+
+    expect($reporte->analisis_id)->toBe($component->get('resultado.analisis_id'))
+        ->and($reporte->comentario)->toBe('Me llegó por WhatsApp de un número desconocido')
+        ->and($reporte->estado)->toBe(EstadoReporte::Pendiente);
 });
 
 test('sending a report without a comment works', function () {
@@ -93,6 +103,8 @@ test('sending a report without a comment works', function () {
         ->assertHasNoErrors()
         ->assertSet('tipoAviso', 'exito')
         ->assertSee('¡Gracias! Tu reporte fue enviado de forma anónima.');
+
+    expect(Reporte::sole()->comentario)->toBeNull();
 });
 
 test('reporting the same analysis twice shows a friendly already reported notice', function () {
@@ -103,10 +115,25 @@ test('reporting the same analysis twice shows a friendly already reported notice
         ->set('comentario', 'Otra vez')
         ->call('reportar')
         ->assertSet('tipoAviso', 'aviso')
-        ->assertSet('analisisReportados', [Analisis::sole()->id])
         ->assertSee('Ya reportaste este análisis, gracias.')
         ->assertSee('data-aviso="aviso"', false)
         ->assertDontSee('bg-red-50', false);
+
+    expect(Reporte::count())->toBe(1)
+        ->and(Reporte::sole()->comentario)->toBeNull();
+});
+
+test('reporting an analysis that no longer exists shows a calm notice', function () {
+    $component = analizarAlgo()->call('abrirReporte');
+
+    Analisis::query()->delete();
+
+    $component->call('reportar')
+        ->assertSet('tipoAviso', 'aviso')
+        ->assertSee(ReportarRequest::MENSAJE_INEXISTENTE)
+        ->assertDontSee('bg-red-50', false);
+
+    expect(Reporte::count())->toBe(0);
 });
 
 test('a new analysis can be reported after reporting a previous one', function () {
@@ -116,19 +143,22 @@ test('a new analysis can be reported after reporting a previous one', function (
         ->call('analizar')
         ->call('abrirReporte')
         ->call('reportar')
-        ->assertSet('tipoAviso', 'exito')
-        ->assertSet('analisisReportados', Analisis::orderBy('id')->pluck('id')->all());
+        ->assertSet('tipoAviso', 'exito');
+
+    expect(Reporte::orderBy('analisis_id')->pluck('analisis_id')->all())
+        ->toBe(Analisis::orderBy('id')->pluck('id')->all());
 });
 
 test('a failed report keeps the comment and shows a calm message', function () {
+    $this->mock(ReportarAnalisis::class)->shouldReceive('registrar')->andThrow(new RuntimeException('Falla simulada'));
+
     analizarAlgo()
         ->call('abrirReporte')
-        ->set('comentario', 'simular-error')
+        ->set('comentario', 'Mi comentario')
         ->call('reportar')
         ->assertSet('tipoAviso', 'error')
         ->assertSet('reporteAbierto', true)
-        ->assertSet('comentario', 'simular-error')
-        ->assertSet('analisisReportados', [])
+        ->assertSet('comentario', 'Mi comentario')
         ->assertSee('x-show="errorRed || true"', false)
         ->assertSee('No pudimos enviar el reporte.')
         ->assertDontSee('bg-red-50', false);
@@ -140,7 +170,10 @@ test('comment longer than 500 characters is rejected', function () {
         ->set('comentario', str_repeat('a', 501))
         ->call('reportar')
         ->assertHasErrors(['comentario' => 'max'])
-        ->assertSet('analisisReportados', []);
+        ->assertSee('El comentario no puede superar los 500 caracteres.')
+        ->assertSet('reporteAbierto', true);
+
+    expect(Reporte::count())->toBe(0);
 });
 
 test('the report form never asks for personal data', function () {

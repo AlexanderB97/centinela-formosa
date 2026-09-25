@@ -1,9 +1,13 @@
 <?php
 
+use App\Http\Requests\ReportarRequest;
 use App\Models\Analisis;
+use App\Services\ReportarAnalisis;
 use App\Services\RiskAnalyzer;
+use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
 use Livewire\Attributes\Layout;
 use Livewire\Attributes\Locked;
 use Livewire\Attributes\Title;
@@ -25,6 +29,7 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
 
     public bool $error = false;
 
+    // DEPRECATED: solo la usa reportarMock(); la deduplicación real está en la tabla `reportes`. Se deja como referencia.
     /**
      * MOCK: IDs ya reportados en esta visita, para simular el 422 de "ya reportado".
      * Backend lo reemplaza por POST /reportar real y define la política de deduplicación.
@@ -104,16 +109,24 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
             return;
         }
 
-        // MOCK: regla que imita el 422 del contrato. Backend define el límite real.
-        $this->validate(
-            ['comentario' => ['nullable', 'string', 'max:500']],
-            ['comentario.max' => 'El comentario no puede superar los 500 caracteres.'],
-        );
+        $reglas = ReportarRequest::reglas();
+        $mensajes = ReportarRequest::mensajes();
+
+        // Error del comentario: se muestra debajo del campo, como cualquier error de validación.
+        $this->validate(['comentario' => $reglas['comentario']], $mensajes);
 
         try {
-            // TODO: backend reemplaza esta llamada por POST /reportar real
-            // con { analisis_id, comentario? }. Sin datos del visitante.
-            [$estado, $mensaje] = $this->reportarMock($this->resultado['analisis_id'], trim($this->comentario) ?: null);
+            // Misma validación y lógica que POST /reportar, sin pasar por HTTP. Sin datos del visitante.
+            Validator::make(['analisis_id' => $this->resultado['analisis_id']], ['analisis_id' => $reglas['analisis_id']], $mensajes)->validate();
+
+            app(ReportarAnalisis::class)->registrar($this->resultado['analisis_id'], $this->comentario);
+        } catch (ValidationException $e) {
+            // 422 del contrato (análisis inexistente o ya reportado): aviso calmo, no un error.
+            $this->tipoAviso = 'aviso';
+            $this->avisoReporte = collect($e->errors())->flatten()->first();
+            $this->reset('reporteAbierto', 'comentario');
+
+            return;
         } catch (Throwable $e) {
             report($e);
             $this->tipoAviso = 'error';
@@ -122,11 +135,12 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
             return;
         }
 
-        $this->tipoAviso = $estado === 201 ? 'exito' : 'aviso';
-        $this->avisoReporte = $mensaje;
+        $this->tipoAviso = 'exito';
+        $this->avisoReporte = ReportarAnalisis::MENSAJE_EXITO;
         $this->reset('reporteAbierto', 'comentario');
     }
 
+    // DEPRECATED: ya no se usa, ReportarAnalisis real lo reemplaza. Se deja como referencia.
     /**
      * MOCK: simula POST /reportar en memoria. Backend lo reemplaza por el endpoint real.
      * Devuelve [status, mensaje] imitando el 201 { mensaje } y los 422 del contrato.
