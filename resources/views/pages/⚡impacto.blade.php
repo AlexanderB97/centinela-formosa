@@ -1,5 +1,6 @@
 <?php
 
+use App\Services\EstadisticasImpacto;
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\Layout;
 use Livewire\Attributes\Locked;
@@ -7,6 +8,7 @@ use Livewire\Attributes\Title;
 use Livewire\Component;
 
 new #[Layout('layouts::publico')] #[Title('Impacto')] class extends Component {
+    // DEPRECATED: solo lo usaba el mock. Con datos reales, el estado vacío aparece cuando las tablas están vacías.
     /**
      * MOCK: cambiá esto a `true` para ver el estado vacío (proyecto recién arrancado)
      * en el navegador. Los tests lo prueban pasando `mockVacio: true` a mount().
@@ -22,11 +24,10 @@ new #[Layout('layouts::publico')] #[Title('Impacto')] class extends Component {
     #[Locked]
     public array $estadisticas;
 
-    public function mount(bool $mockVacio = self::MOCK_VACIO): void
+    public function mount(): void
     {
-        // TODO: backend reemplaza esta llamada por el servicio reutilizable de estadísticas
-        // (la misma lógica que respalde el JSON, si existe), que devuelve este mismo array.
-        $this->estadisticas = $this->estadisticasMock($mockVacio);
+        // Agregados reales de analisis, reportes y casos_confirmados (COUNT / GROUP BY en la base).
+        $this->estadisticas = app(EstadisticasImpacto::class)->obtener();
     }
 
     /**
@@ -50,6 +51,7 @@ new #[Layout('layouts::publico')] #[Title('Impacto')] class extends Component {
         ], array_keys($etiquetas));
     }
 
+    // DEPRECATED: ya no se usa, EstadisticasImpacto real lo reemplaza. Se deja como referencia.
     /**
      * MOCK: estadísticas de ejemplo en memoria. Backend las reemplaza por los agregados reales.
      * Con `$vacio` devuelve todo en cero para probar el estado de un proyecto recién arrancado.

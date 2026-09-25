@@ -14,8 +14,7 @@ Route::post('analizar', [AnalisisController::class, 'store'])
     ->middleware('throttle:analizar')
     ->name('analizar.store');
 
-// TEMPORAL: la URL pública /impacto es la definitiva. Lo que cambia cuando backend implemente HU3.1
-// es el origen de los datos (hoy es un mock en memoria dentro del componente pages::impacto).
+// Dashboard público de impacto (HU3.1). La página Livewire lee los agregados reales de EstadisticasImpacto.
 Route::livewire('/impacto', 'pages::impacto')->name('impacto');
 
 // API pública de reportes anónimos (HU2.2). El componente Livewire usa la misma lógica sin pasar por HTTP.
