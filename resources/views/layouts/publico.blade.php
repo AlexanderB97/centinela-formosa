@@ -31,6 +31,20 @@
                             {{ __('Impacto') }}
                         </a>
                     </li>
+                    <li>
+                        <a
+                            href="{{ route('rankings') }}"
+                            @if (request()->routeIs('rankings')) aria-current="page" @endif
+                            @class([
+                                'rounded-md px-3 py-2 text-sm font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-[#22c55e]',
+                                'bg-white/10 text-white' => request()->routeIs('rankings'),
+                                'text-neutral-300 hover:bg-white/5 hover:text-white' => ! request()->routeIs('rankings'),
+                            ])
+                            wire:navigate
+                        >
+                            {{ __('Rankings') }}
+                        </a>
+                    </li>
                 </ul>
             </nav>
         </header>

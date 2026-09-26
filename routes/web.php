@@ -17,6 +17,9 @@ Route::post('analizar', [AnalisisController::class, 'store'])
 // Dashboard público de impacto (HU3.1). La página Livewire lee los agregados reales de EstadisticasImpacto.
 Route::livewire('/impacto', 'pages::impacto')->name('impacto');
 
+// Ranking público de lo más consultado. La página Livewire lee los agregados de RankingConsultados.
+Route::livewire('/rankings', 'pages::rankings')->name('rankings');
+
 // API pública de reportes anónimos (HU2.2). El componente Livewire usa la misma lógica sin pasar por HTTP.
 Route::post('reportar', [ReporteController::class, 'store'])
     ->middleware('throttle:reportar')
