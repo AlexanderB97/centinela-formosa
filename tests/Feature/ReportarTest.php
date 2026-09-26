@@ -1,6 +1,8 @@
 <?php
 
+use App\Enums\Departamento;
 use App\Enums\EstadoReporte;
+use App\Enums\MedioRecepcion;
 use App\Enums\NivelRiesgo;
 use App\Http\Requests\ReportarRequest;
 use App\Models\Analisis;
@@ -183,11 +185,77 @@ test('the report form never asks for personal data', function () {
     expect($seccion)->not->toBeEmpty();
     $seccion = $seccion[0];
 
-    // El único campo del formulario es el comentario.
-    expect(preg_match_all('~<(input|textarea|select)\b~', $seccion))->toBe(1);
-    expect($seccion)->toContain('id="comentario-reporte"');
+    // Los únicos campos son el comentario y el contexto opcional del mensaje (departamento y medio).
+    expect(preg_match_all('~<(input|textarea|select)\b~', $seccion))->toBe(3);
+    expect($seccion)->toContain('id="comentario-reporte"')
+        ->toContain('id="departamento-reporte"')
+        ->toContain('id="medio-reporte"');
 
     foreach (['type="email"', 'type="tel"', 'nombre', 'name="email"', 'telefono', 'teléfono', 'apellido', 'dni'] as $prohibido) {
         expect(Str::lower($seccion))->not->toContain($prohibido);
     }
+});
+
+test('the report form offers the department and channel lists with an empty default', function () {
+    analizarAlgo()
+        ->call('abrirReporte')
+        ->assertSet('departamento', '')
+        ->assertSet('medio', '')
+        ->assertSee('Departamento (opcional)')
+        ->assertSee('¿Cómo te llegó? (opcional)')
+        ->assertSee('Prefiero no decir')
+        ->assertSee('Ramón Lista')
+        ->assertSee('Redes sociales');
+});
+
+test('a report can be sent with department and channel', function () {
+    analizarAlgo()
+        ->call('abrirReporte')
+        ->set('departamento', 'patino')
+        ->set('medio', 'sms')
+        ->call('reportar')
+        ->assertHasNoErrors()
+        ->assertSet('tipoAviso', 'exito')
+        ->assertSet('departamento', '')
+        ->assertSet('medio', '');
+
+    expect(Reporte::sole()->departamento)->toBe(Departamento::Patino)
+        ->and(Reporte::sole()->medio)->toBe(MedioRecepcion::Sms);
+});
+
+test('a report sent without choosing department or channel stores null', function () {
+    analizarAlgo()
+        ->call('abrirReporte')
+        ->set('medio', 'email')
+        ->call('reportar')
+        ->assertSet('tipoAviso', 'exito');
+
+    expect(Reporte::sole()->departamento)->toBeNull()
+        ->and(Reporte::sole()->medio)->toBe(MedioRecepcion::Email);
+});
+
+test('an invalid department shows the error under the field and sends nothing', function () {
+    analizarAlgo()
+        ->call('abrirReporte')
+        ->set('departamento', 'cordoba')
+        ->call('reportar')
+        ->assertHasErrors(['departamento'])
+        ->assertSee('El departamento seleccionado no es válido.')
+        ->assertSet('reporteAbierto', true);
+
+    expect(Reporte::count())->toBe(0);
+});
+
+test('department and channel are cleared when the report is closed or a new analysis runs', function () {
+    analizarAlgo()
+        ->call('abrirReporte')
+        ->set('departamento', 'bermejo')
+        ->set('medio', 'whatsapp')
+        ->call('cerrarReporte')
+        ->assertSet('departamento', '')
+        ->assertSet('medio', '')
+        ->call('abrirReporte')
+        ->set('departamento', 'bermejo')
+        ->call('analizar')
+        ->assertSet('departamento', '');
 });

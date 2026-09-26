@@ -2,8 +2,11 @@
 
 namespace App\Http\Requests;
 
+use App\Enums\Departamento;
+use App\Enums\MedioRecepcion;
 use Illuminate\Contracts\Validation\ValidationRule;
 use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Validation\Rule;
 
 class ReportarRequest extends FormRequest
 {
@@ -51,6 +54,8 @@ class ReportarRequest extends FormRequest
         return [
             'analisis_id' => ['required', 'integer', 'exists:analisis,id', 'unique:reportes,analisis_id'],
             'comentario' => ['nullable', 'string', 'max:'.self::LARGO_MAXIMO_COMENTARIO],
+            'departamento' => ['nullable', Rule::enum(Departamento::class)],
+            'medio' => ['nullable', Rule::enum(MedioRecepcion::class)],
         ];
     }
 
@@ -66,6 +71,8 @@ class ReportarRequest extends FormRequest
             'analisis_id.unique' => self::MENSAJE_YA_REPORTADO,
             'comentario.string' => 'El comentario debe ser texto.',
             'comentario.max' => 'El comentario no puede superar los '.self::LARGO_MAXIMO_COMENTARIO.' caracteres.',
+            'departamento.enum' => 'El departamento seleccionado no es válido.',
+            'medio.enum' => 'El medio seleccionado no es válido.',
         ];
     }
 }

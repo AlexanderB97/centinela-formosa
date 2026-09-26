@@ -1,5 +1,7 @@
 <?php
 
+use App\Enums\Departamento;
+use App\Enums\MedioRecepcion;
 use App\Http\Requests\ReportarRequest;
 use App\Models\Analisis;
 use App\Services\ReportarAnalisis;
@@ -42,6 +44,10 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
     public bool $reporteAbierto = false;
     public string $comentario = '';
 
+    /** Contexto opcional del mensaje (no del visitante): valor de Departamento / MedioRecepcion, o vacío. */
+    public string $departamento = '';
+    public string $medio = '';
+
     /** Mensaje del último reporte y su tipo: 'exito' (201), 'aviso' (422) o 'error' (falla del envío). */
     public ?string $avisoReporte = null;
     public ?string $tipoAviso = null;
@@ -53,13 +59,13 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
         }
 
         $this->tipo = $tipo;
-        $this->reset('contenido', 'resultado', 'error', 'reporteAbierto', 'comentario', 'avisoReporte', 'tipoAviso');
+        $this->reset('contenido', 'resultado', 'error', 'reporteAbierto', 'comentario', 'departamento', 'medio', 'avisoReporte', 'tipoAviso');
         $this->resetValidation();
     }
 
     public function analizar(): void
     {
-        $this->reset('resultado', 'error', 'reporteAbierto', 'comentario', 'avisoReporte', 'tipoAviso');
+        $this->reset('resultado', 'error', 'reporteAbierto', 'comentario', 'departamento', 'medio', 'avisoReporte', 'tipoAviso');
 
         // MOCK: reglas que imitan el 422 del contrato. Backend define las definitivas.
         $this->validate([
@@ -93,14 +99,14 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
         }
 
         $this->reporteAbierto = true;
-        $this->reset('comentario', 'avisoReporte', 'tipoAviso');
-        $this->resetValidation('comentario');
+        $this->reset('comentario', 'departamento', 'medio', 'avisoReporte', 'tipoAviso');
+        $this->resetValidation(['comentario', 'departamento', 'medio']);
     }
 
     public function cerrarReporte(): void
     {
-        $this->reset('reporteAbierto', 'comentario', 'avisoReporte', 'tipoAviso');
-        $this->resetValidation('comentario');
+        $this->reset('reporteAbierto', 'comentario', 'departamento', 'medio', 'avisoReporte', 'tipoAviso');
+        $this->resetValidation(['comentario', 'departamento', 'medio']);
     }
 
     public function reportar(): void
@@ -112,19 +118,28 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
         $reglas = ReportarRequest::reglas();
         $mensajes = ReportarRequest::mensajes();
 
-        // Error del comentario: se muestra debajo del campo, como cualquier error de validación.
-        $this->validate(['comentario' => $reglas['comentario']], $mensajes);
+        // Errores del comentario, el departamento o el medio: se muestran debajo de cada campo.
+        $this->validate([
+            'comentario' => $reglas['comentario'],
+            'departamento' => $reglas['departamento'],
+            'medio' => $reglas['medio'],
+        ], $mensajes);
 
         try {
             // Misma validación y lógica que POST /reportar, sin pasar por HTTP. Sin datos del visitante.
             Validator::make(['analisis_id' => $this->resultado['analisis_id']], ['analisis_id' => $reglas['analisis_id']], $mensajes)->validate();
 
-            app(ReportarAnalisis::class)->registrar($this->resultado['analisis_id'], $this->comentario);
+            app(ReportarAnalisis::class)->registrar(
+                $this->resultado['analisis_id'],
+                $this->comentario,
+                Departamento::tryFrom($this->departamento),
+                MedioRecepcion::tryFrom($this->medio),
+            );
         } catch (ValidationException $e) {
             // 422 del contrato (análisis inexistente o ya reportado): aviso calmo, no un error.
             $this->tipoAviso = 'aviso';
             $this->avisoReporte = collect($e->errors())->flatten()->first();
-            $this->reset('reporteAbierto', 'comentario');
+            $this->reset('reporteAbierto', 'comentario', 'departamento', 'medio');
 
             return;
         } catch (Throwable $e) {
@@ -137,7 +152,7 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
 
         $this->tipoAviso = 'exito';
         $this->avisoReporte = ReportarAnalisis::MENSAJE_EXITO;
-        $this->reset('reporteAbierto', 'comentario');
+        $this->reset('reporteAbierto', 'comentario', 'departamento', 'medio');
     }
 
     // DEPRECATED: ya no se usa, ReportarAnalisis real lo reemplaza. Se deja como referencia.
@@ -718,6 +733,54 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
                                     </p>
 
                                     <form wire:submit="reportar" x-on:submit="errorRed = false" class="mt-3 flex flex-col gap-3">
+                                        @php
+                                            $claseSelect = 'w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-neutral-900 focus:border-[#16a34a] focus:outline-none focus:ring-2 focus:ring-[#16a34a]/40';
+                                        @endphp
+
+                                        {{-- Contexto opcional del mensaje (dónde y por dónde llegó). No identifica al visitante. --}}
+                                        <div class="grid gap-3 sm:grid-cols-2">
+                                            <div class="flex flex-col gap-2">
+                                                <label for="departamento-reporte" class="text-sm font-medium text-neutral-800">{{ __('Departamento (opcional)') }}</label>
+                                                <select
+                                                    id="departamento-reporte"
+                                                    wire:model="departamento"
+                                                    aria-describedby="contexto-ayuda @error('departamento') departamento-error @enderror"
+                                                    @error('departamento') aria-invalid="true" @enderror
+                                                    class="{{ $claseSelect }}"
+                                                >
+                                                    <option value="">{{ __('Prefiero no decir') }}</option>
+                                                    @foreach (\App\Enums\Departamento::cases() as $opcion)
+                                                        <option value="{{ $opcion->value }}">{{ $opcion->etiqueta() }}</option>
+                                                    @endforeach
+                                                </select>
+                                                @error('departamento')
+                                                    <p id="departamento-error" class="text-sm text-red-700">{{ $message }}</p>
+                                                @enderror
+                                            </div>
+
+                                            <div class="flex flex-col gap-2">
+                                                <label for="medio-reporte" class="text-sm font-medium text-neutral-800">{{ __('¿Cómo te llegó? (opcional)') }}</label>
+                                                <select
+                                                    id="medio-reporte"
+                                                    wire:model="medio"
+                                                    aria-describedby="contexto-ayuda @error('medio') medio-error @enderror"
+                                                    @error('medio') aria-invalid="true" @enderror
+                                                    class="{{ $claseSelect }}"
+                                                >
+                                                    <option value="">{{ __('Prefiero no decir') }}</option>
+                                                    @foreach (\App\Enums\MedioRecepcion::cases() as $opcion)
+                                                        <option value="{{ $opcion->value }}">{{ $opcion->etiqueta() }}</option>
+                                                    @endforeach
+                                                </select>
+                                                @error('medio')
+                                                    <p id="medio-error" class="text-sm text-red-700">{{ $message }}</p>
+                                                @enderror
+                                            </div>
+                                        </div>
+                                        <p id="contexto-ayuda" class="-mt-1 text-xs text-neutral-500">
+                                            {{ __('Son opcionales y no te identifican: nos ayudan a saber dónde y por dónde circulan las estafas.') }}
+                                        </p>
+
                                         <div class="flex flex-col gap-2">
                                             <label for="comentario-reporte" class="text-sm font-medium text-neutral-800">{{ __('Comentario (opcional)') }}</label>
                                             <textarea

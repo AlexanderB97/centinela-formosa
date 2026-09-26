@@ -1,6 +1,8 @@
 <?php
 
+use App\Enums\Departamento;
 use App\Enums\EstadoReporte;
+use App\Enums\MedioRecepcion;
 use App\Enums\NivelRiesgo;
 use App\Enums\TipoContenido;
 use App\Models\Analisis;
@@ -201,4 +203,30 @@ test('empty state is shown when there is nothing left to review', function () {
         ->assertSee('No hay nada para revisar')
         ->assertSee('Reportes pendientes')
         ->assertSee('(0)');
+});
+
+test('each card shows the department and channel when they exist', function () {
+    $completo = Reporte::factory()->create(['departamento' => Departamento::RamonLista, 'medio' => MedioRecepcion::Whatsapp]);
+
+    Livewire::test('pages::staff.reportes')
+        ->assertSeeHtml("data-test=\"contexto-{$completo->id}\"")
+        ->assertSee('Departamento:')
+        ->assertSee('Ramón Lista')
+        ->assertSee('Medio:')
+        ->assertSee('WhatsApp')
+        ->assertDontSee('No especificado');
+});
+
+test('missing department or channel show as not specified without breaking the card', function () {
+    $sinNada = Reporte::factory()->create(['departamento' => null, 'medio' => null]);
+    $soloMedio = Reporte::factory()->create(['departamento' => null, 'medio' => MedioRecepcion::Email]);
+
+    $html = Livewire::test('pages::staff.reportes')
+        ->assertSeeHtml("data-reporte=\"{$sinNada->id}\"")
+        ->assertSeeHtml("data-reporte=\"{$soloMedio->id}\"")
+        ->assertSee('Email')
+        ->html();
+
+    // Sin nada: los dos lados dicen "No especificado"; solo medio: únicamente el departamento.
+    expect(substr_count($html, 'No especificado'))->toBe(3);
 });
