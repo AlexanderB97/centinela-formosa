@@ -1024,6 +1024,10 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
             </div>
         </div>
     </div>
+
+    {{-- Componente hijo aparte: no se vuelve a consultar cada vez que el analizador se renderiza.
+         La clave fija hace que Livewire lo reconozca en cada render (una autogenerada puede cambiar y volver a montarlo). --}}
+    <livewire:ultimas-noticias key="ultimas-noticias" />
 </div>
 
 @assets

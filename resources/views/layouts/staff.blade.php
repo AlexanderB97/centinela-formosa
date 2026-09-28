@@ -84,6 +84,18 @@
                         </a>
                     </li>
 
+                    {{-- Visible para cualquier staff: todos pueden escribir y publicar noticias. --}}
+                    <li>
+                        <a
+                            href="{{ route('staff.noticias') }}"
+                            @if (request()->routeIs('staff.noticias*')) aria-current="page" @endif
+                            class="{{ $claseLink }} {{ request()->routeIs('staff.noticias*') ? $claseActivo : $claseInactivo }}"
+                            wire:navigate
+                        >
+                            {{ __('Noticias') }}
+                        </a>
+                    </li>
+
                     @if (auth('staff')->user()?->isAdmin())
                         <li>
                             <a

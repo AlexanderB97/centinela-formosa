@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\AnalisisController;
+use App\Http\Controllers\ImagenNoticiaController;
 use App\Http\Controllers\ReporteController;
 use Illuminate\Support\Facades\Route;
 
@@ -22,6 +23,12 @@ Route::livewire('/rankings', 'pages::rankings')->name('rankings');
 
 // Mapa público de zonas afectadas. La página Livewire lee los agregados de MapaZonasAfectadas.
 Route::livewire('/mapa', 'pages::mapa')->name('mapa');
+
+// Noticias públicas: solo las publicadas. La imagen de portada sale del disco privado por un controlador
+// (sin storage:link): un borrador devuelve 404 a los visitantes aunque adivinen la URL.
+Route::livewire('/noticias', 'pages::noticias')->name('noticias');
+Route::livewire('/noticias/{noticia}', 'pages::noticia')->whereNumber('noticia')->name('noticias.show');
+Route::get('/noticias/{noticia}/imagen', ImagenNoticiaController::class)->whereNumber('noticia')->name('noticias.imagen');
 
 // API pública de reportes anónimos (HU2.2). El componente Livewire usa la misma lógica sin pasar por HTTP.
 Route::post('reportar', [ReporteController::class, 'store'])

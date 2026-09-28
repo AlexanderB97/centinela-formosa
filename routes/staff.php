@@ -20,6 +20,12 @@ Route::prefix('staff')->name('staff.')->group(function () {
         Route::post('reportes/{reporte}/confirmar', [ModeracionController::class, 'confirmar'])->name('reportes.confirmar');
         Route::post('reportes/{reporte}/descartar', [ModeracionController::class, 'descartar'])->name('reportes.descartar');
 
+        // Noticias: cualquier staff crea, edita, publica y despublica. auth:staff también corre en cada
+        // request de Livewire (es persistente por defecto), así que no hace falta un middleware propio.
+        Route::livewire('noticias', 'pages::staff.noticias')->name('noticias');
+        Route::livewire('noticias/crear', 'pages::staff.editar-noticia')->name('noticias.crear');
+        Route::livewire('noticias/{noticia}/editar', 'pages::staff.editar-noticia')->whereNumber('noticia')->name('noticias.editar');
+
         // Gestión de staff (HU1.2): solo admins; un moderador recibe 403.
         Route::middleware('admin.staff')->group(function () {
             Route::livewire('usuarios', 'pages::staff.usuarios')->name('usuarios');
