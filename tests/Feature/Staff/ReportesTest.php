@@ -1,5 +1,6 @@
 <?php
 
+use App\Enums\Barrio;
 use App\Enums\Departamento;
 use App\Enums\EstadoReporte;
 use App\Enums\MedioRecepcion;
@@ -229,4 +230,21 @@ test('missing department or channel show as not specified without breaking the c
 
     // Sin nada: los dos lados dicen "No especificado"; solo medio: únicamente el departamento.
     expect(substr_count($html, 'No especificado'))->toBe(3);
+});
+
+test('each card shows the neighborhood when it exists, and nothing extra when it does not', function () {
+    $conBarrio = Reporte::factory()->create(['departamento' => Departamento::FormosaCapital, 'barrio' => Barrio::BernardinoRivadaviaLote4]);
+
+    Livewire::test('pages::staff.reportes')
+        ->assertSeeHtml("data-test=\"contexto-{$conBarrio->id}\"")
+        ->assertSee('Barrio:')
+        ->assertSee('Bernardino Rivadavia (Lote 4)')
+        ->assertSee('Formosa Capital');
+
+    $conBarrio->delete();
+    Reporte::factory()->create(['departamento' => Departamento::Pirane]);
+
+    Livewire::test('pages::staff.reportes')
+        ->assertSee('Pirané')
+        ->assertDontSee('Barrio:');
 });

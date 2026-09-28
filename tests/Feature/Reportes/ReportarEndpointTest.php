@@ -1,5 +1,6 @@
 <?php
 
+use App\Enums\Barrio;
 use App\Enums\Departamento;
 use App\Enums\EstadoReporte;
 use App\Enums\MedioRecepcion;
@@ -106,7 +107,7 @@ test('a 500 character comment is accepted', function () {
 
 test('reports never store or return anything about the visitor', function () {
     expect(Schema::getColumnListing('reportes'))
-        ->toEqualCanonicalizing(['id', 'analisis_id', 'comentario', 'departamento', 'medio', 'estado', 'created_at', 'updated_at']);
+        ->toEqualCanonicalizing(['id', 'analisis_id', 'comentario', 'departamento', 'barrio', 'medio', 'estado', 'created_at', 'updated_at']);
 
     $analisis = Analisis::factory()->create();
 
@@ -178,4 +179,28 @@ test('a department or channel outside the list is a validation error', function 
     'unknown department' => [['departamento' => 'cordoba'], 'departamento', 'El departamento seleccionado no es válido.'],
     'label instead of value' => [['departamento' => 'Ramón Lista'], 'departamento', 'El departamento seleccionado no es válido.'],
     'unknown channel' => [['medio' => 'telegram'], 'medio', 'El medio seleccionado no es válido.'],
+]);
+
+test('a neighborhood can be sent together with Formosa Capital', function () {
+    $analisis = Analisis::factory()->create();
+
+    $this->postJson(route('reportar.store'), ['analisis_id' => $analisis->id, 'departamento' => 'formosa_capital', 'barrio' => 'ocho_de_octubre'])
+        ->assertCreated();
+
+    expect(Reporte::sole()->barrio)->toBe(Barrio::OchoDeOctubre)
+        ->and(Reporte::sole()->departamento)->toBe(Departamento::FormosaCapital);
+});
+
+test('a neighborhood outside the list or outside the capital is a validation error', function (array $extra, string $mensaje) {
+    $analisis = Analisis::factory()->create();
+
+    $this->postJson(route('reportar.store'), ['analisis_id' => $analisis->id, ...$extra])
+        ->assertUnprocessable()
+        ->assertJsonValidationErrors(['barrio' => $mensaje]);
+
+    expect(Reporte::count())->toBe(0);
+})->with([
+    'unknown neighborhood' => [['departamento' => 'formosa_capital', 'barrio' => 'palermo'], 'El barrio seleccionado no es válido.'],
+    'other department' => [['departamento' => 'pirane', 'barrio' => 'guadalupe'], 'El barrio solo se puede indicar si el departamento es Formosa Capital.'],
+    'no department' => [['barrio' => 'guadalupe'], 'El barrio solo se puede indicar si el departamento es Formosa Capital.'],
 ]);

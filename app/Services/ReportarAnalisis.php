@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Enums\Barrio;
 use App\Enums\Departamento;
 use App\Enums\MedioRecepcion;
 use App\Http\Requests\ReportarRequest;
@@ -18,11 +19,11 @@ class ReportarAnalisis
     public const MENSAJE_EXITO = '¡Gracias! Tu reporte fue enviado de forma anónima.';
 
     /**
-     * departamento and medio are optional context of the message, never data about the visitor.
+     * departamento, medio and barrio are optional context of the message, never data about the visitor.
      *
      * @throws ValidationException when the analysis was already reported (e.g. two concurrent requests).
      */
-    public function registrar(int $analisisId, ?string $comentario, ?Departamento $departamento = null, ?MedioRecepcion $medio = null): Reporte
+    public function registrar(int $analisisId, ?string $comentario, ?Departamento $departamento = null, ?MedioRecepcion $medio = null, ?Barrio $barrio = null): Reporte
     {
         $comentario = trim((string) $comentario);
 
@@ -32,6 +33,7 @@ class ReportarAnalisis
                 'comentario' => $comentario === '' ? null : $comentario,
                 'departamento' => $departamento,
                 'medio' => $medio,
+                'barrio' => $barrio,
             ]);
         } catch (UniqueConstraintViolationException) {
             // Validation already checks this; the unique index covers the race between two requests.

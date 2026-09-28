@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Enums\Barrio;
 use App\Enums\Departamento;
 use App\Enums\EstadoReporte;
 use App\Enums\MedioRecepcion;
@@ -17,20 +18,22 @@ use Illuminate\Support\Carbon;
  *
  * departamento and medio are optional context of the message (where and how it arrived), not
  * data about who reported it. Even so, in small departments their combination with the date and
- * the comment narrows things down: today only staff sees them per report. If they are ever made
- * public (e.g. a map in /impacto), publish them only aggregated and with a minimum threshold,
- * like RankingConsultados::MINIMO_REPETICIONES does for the rankings.
+ * the comment narrows things down: staff sees them per report, the public only aggregated.
+ * The public map (/mapa) shows barrio only per neighborhood and with at least
+ * MapaZonasAfectadas::MINIMO_REPORTES reports; any new public use must keep that rule.
+ * barrio is only set when departamento is formosa_capital.
  *
  * @property int $id
  * @property int $analisis_id
  * @property string|null $comentario
  * @property Departamento|null $departamento
+ * @property Barrio|null $barrio
  * @property MedioRecepcion|null $medio
  * @property EstadoReporte $estado
  * @property Carbon|null $created_at
  * @property Carbon|null $updated_at
  */
-#[Fillable(['analisis_id', 'comentario', 'departamento', 'medio', 'estado'])]
+#[Fillable(['analisis_id', 'comentario', 'departamento', 'barrio', 'medio', 'estado'])]
 class Reporte extends Model
 {
     /** @use HasFactory<ReporteFactory> */
@@ -55,6 +58,7 @@ class Reporte extends Model
         return [
             'estado' => EstadoReporte::class,
             'departamento' => Departamento::class,
+            'barrio' => Barrio::class,
             'medio' => MedioRecepcion::class,
         ];
     }

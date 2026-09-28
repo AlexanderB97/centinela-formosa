@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Enums\Barrio;
 use App\Enums\Departamento;
 use App\Enums\MedioRecepcion;
 use App\Http\Requests\ReportarRequest;
@@ -20,6 +21,7 @@ class ReporteController extends Controller
             $request->input('comentario'),
             $request->enum('departamento', Departamento::class),
             $request->enum('medio', MedioRecepcion::class),
+            $request->enum('barrio', Barrio::class),
         );
 
         return response()->json(['mensaje' => ReportarAnalisis::MENSAJE_EXITO], 201);

@@ -2,6 +2,7 @@
 
 namespace App\Http\Requests;
 
+use App\Enums\Barrio;
 use App\Enums\Departamento;
 use App\Enums\MedioRecepcion;
 use Illuminate\Contracts\Validation\ValidationRule;
@@ -55,6 +56,8 @@ class ReportarRequest extends FormRequest
             'analisis_id' => ['required', 'integer', 'exists:analisis,id', 'unique:reportes,analisis_id'],
             'comentario' => ['nullable', 'string', 'max:'.self::LARGO_MAXIMO_COMENTARIO],
             'departamento' => ['nullable', Rule::enum(Departamento::class)],
+            // A neighborhood only makes sense inside Formosa Capital.
+            'barrio' => ['nullable', Rule::enum(Barrio::class), 'prohibited_unless:departamento,'.Departamento::FormosaCapital->value],
             'medio' => ['nullable', Rule::enum(MedioRecepcion::class)],
         ];
     }
@@ -72,6 +75,8 @@ class ReportarRequest extends FormRequest
             'comentario.string' => 'El comentario debe ser texto.',
             'comentario.max' => 'El comentario no puede superar los '.self::LARGO_MAXIMO_COMENTARIO.' caracteres.',
             'departamento.enum' => 'El departamento seleccionado no es válido.',
+            'barrio.enum' => 'El barrio seleccionado no es válido.',
+            'barrio.prohibited_unless' => 'El barrio solo se puede indicar si el departamento es Formosa Capital.',
             'medio.enum' => 'El medio seleccionado no es válido.',
         ];
     }
