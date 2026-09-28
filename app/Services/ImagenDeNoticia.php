@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use GdImage;
 use Illuminate\Contracts\Validation\ValidationRule;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Storage;
@@ -68,7 +69,7 @@ class ImagenDeNoticia
      *
      * @return string the path on the DISCO disk.
      *
-     * @throws ValidationException when GD cannot decode the image.
+     * @throws ValidationException when GD cannot decode or scale the image.
      */
     public function guardar(UploadedFile $archivo): string
     {
@@ -88,8 +89,13 @@ class ImagenDeNoticia
         imagesavealpha($imagen, true);
 
         if (imagesx($imagen) > self::ANCHO_GUARDADO) {
-            $escalada = imagescale($imagen, self::ANCHO_GUARDADO);
+            $escalada = $this->escalar($imagen, self::ANCHO_GUARDADO);
             imagedestroy($imagen);
+
+            if ($escalada === false) {
+                throw ValidationException::withMessages(['imagen' => 'No pudimos procesar la imagen. Probá con otra.']);
+            }
+
             $imagen = $escalada;
             imagealphablending($imagen, false);
             imagesavealpha($imagen, true);
@@ -104,6 +110,14 @@ class ImagenDeNoticia
         Storage::disk(self::DISCO)->put($ruta, $webp);
 
         return $ruta;
+    }
+
+    /**
+     * Scale to the given width keeping the proportions. GD returns false when it cannot (e.g. out of memory).
+     */
+    protected function escalar(GdImage $imagen, int $ancho): GdImage|false
+    {
+        return imagescale($imagen, $ancho);
     }
 
     public function borrar(?string $ruta): void
