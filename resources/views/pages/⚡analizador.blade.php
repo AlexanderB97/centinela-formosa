@@ -89,7 +89,7 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
             'tipo.in' => 'El tipo de contenido no es válido.',
             'contenido.required' => match ($this->tipo) {
                 'link' => 'Pegá el link que querés analizar.',
-                'qr' => 'Primero subí una foto con un código QR.',
+                'qr' => 'Primero escaneá el código QR con la cámara o subí una foto.',
                 'archivo' => 'Primero elegí el archivo que querés revisar.',
                 default => 'Pegá el mensaje que querés analizar.',
             },
@@ -374,7 +374,7 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
     <div>
         <h1 class="text-2xl font-semibold text-neutral-900 sm:text-3xl">{{ __('Analizador de riesgo') }}</h1>
         <p class="mt-2 text-neutral-600">
-            {{ __('Pegá un mensaje, un link o subí la foto de un código QR y te decimos si parece una estafa.') }}
+            {{ __('Pegá un mensaje, un link o escaneá un código QR y te decimos si parece una estafa.') }}
         </p>
     </div>
 
@@ -427,7 +427,7 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
             x-on:keydown.arrow-left.prevent="mover(-1)"
             class="flex border-b border-neutral-200 px-2 sm:px-4"
         >
-            @foreach (['texto' => __('Texto'), 'link' => __('Link'), 'qr' => __('Foto de QR'), 'archivo' => __('Archivo')] as $valor => $etiqueta)
+            @foreach (['texto' => __('Texto'), 'link' => __('Link'), 'qr' => __('QR'), 'archivo' => __('Archivo')] as $valor => $etiqueta)
                 <button
                     type="button"
                     role="tab"
@@ -436,7 +436,8 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
                     aria-selected="{{ $tipo === $valor ? 'true' : 'false' }}"
                     tabindex="{{ $tipo === $valor ? '0' : '-1' }}"
                     wire:click="seleccionarTipo('{{ $valor }}')"
-                    x-on:click="errorCliente = false"
+                    {{-- El aviso apaga la cámara del QR enseguida, sin esperar la respuesta del servidor. --}}
+                    x-on:click="errorCliente = false; $dispatch('analizador-cambio-tab')"
                     wire:loading.attr="disabled"
                     wire:target="analizar"
                     @class([
@@ -509,11 +510,31 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
                         />
                     </div>
                 @elseif ($tipo === 'qr')
-                    {{-- La imagen se decodifica en el navegador con jsQR: no tiene wire:model, así que nunca se sube. --}}
+                    {{--
+                        Dos formas de leer el QR, las dos 100% en el navegador con jsQR (resources/js/qr.js):
+                        subir una foto (el input no tiene wire:model, así que nunca se sube) o la cámara en vivo
+                        (ningún cuadro del video sale del dispositivo). Al servidor solo llega el texto leído.
+                        La cámara es una excepción deliberada a "no pedir permisos del dispositivo": se pide solo
+                        cuando la persona toca "Usar cámara", y subir una foto sigue siendo la opción por defecto.
+                    --}}
                     <div
                         x-data="{
+                            modo: 'imagen',
                             estado: '',
+                            camara: '',
                             arrastrando: false,
+                            escaner: null,
+
+                            // Único lugar que decide qué pasa con un QR ya leído, venga de una foto o de la cámara.
+                            usarTextoQr(texto, { analizarYa = false } = {}) {
+                                this.$wire.contenido = texto;
+
+                                if (analizarYa) {
+                                    this.errorCliente = false;
+                                    this.$wire.analizar();
+                                }
+                            },
+
                             async leer(archivo) {
                                 this.$wire.contenido = '';
 
@@ -527,47 +548,200 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
                                 try {
                                     const texto = await window.leerQrDeArchivo(archivo);
                                     this.estado = texto ? 'ok' : 'sin-qr';
-                                    if (texto) this.$wire.contenido = texto;
+                                    if (texto) this.usarTextoQr(texto);
                                 } catch (e) {
                                     this.estado = 'invalido';
                                 }
                             },
-                        }"
-                        class="flex flex-col gap-2"
-                    >
-                        <label
-                            for="archivo-qr"
-                            x-on:dragover.prevent="arrastrando = true"
-                            x-on:dragleave.prevent="arrastrando = false"
-                            x-on:drop.prevent="arrastrando = false; leer($event.dataTransfer.files[0])"
-                            :class="arrastrando && 'border-[#16a34a] bg-[#16a34a]/5'"
-                            class="{{ $zona }} cursor-pointer hover:border-[#16a34a] focus-within:ring-2 focus-within:ring-[#16a34a]/40"
-                        >
-                            <span class="{{ $iconoZona }}" aria-hidden="true">
-                                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" class="size-7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" focusable="false">{!! $iconos['camara'] !!}</svg>
-                            </span>
-                            <span id="qr-titulo" class="{{ $tituloZona }}">{{ __('Subí la foto del código QR') }}</span>
-                            <span class="{{ $ayudaZona }}">{{ __('Arrastrala acá o tocá para elegirla. En el celular también podés sacarla con la cámara.') }}</span>
-                            <span class="mt-2 inline-flex rounded-md bg-[#12151a] px-4 py-2 text-sm font-medium text-white" aria-hidden="true">{{ __('Elegir foto') }}</span>
-                            <input
-                                id="archivo-qr"
-                                type="file"
-                                accept="image/*"
-                                x-on:change="leer($event.target.files[0])"
-                                aria-labelledby="qr-titulo"
-                                aria-describedby="qr-ayuda qr-estado"
-                                @error('contenido') aria-invalid="true" @enderror
-                                class="sr-only"
-                            />
-                        </label>
-                        <p id="qr-ayuda" class="text-xs text-neutral-500">
-                            {{ __('La imagen se procesa en tu dispositivo: no se sube a ningún servidor.') }}
-                        </p>
 
-                        <div id="qr-estado" aria-live="polite" class="text-sm">
-                            <p x-show="estado === 'leyendo'" x-cloak class="text-neutral-600">{{ __('Leyendo el código…') }}</p>
-                            <p x-show="estado === 'sin-qr'" x-cloak class="text-red-700">{{ __('No encontramos un código QR en la imagen. Probá con una foto más nítida y de frente.') }}</p>
-                            <p x-show="estado === 'invalido'" x-cloak class="text-red-700">{{ __('No pudimos leer la imagen. Probá con otra foto.') }}</p>
+                            elegirModo(modo) {
+                                if (modo === this.modo) return;
+
+                                this.detenerCamara();
+                                this.modo = modo;
+                                this.estado = '';
+                                this.camara = '';
+                                this.$wire.contenido = '';
+
+                                // Tocar 'Usar cámara' es el pedido explícito: recién ahí se pide el permiso.
+                                if (modo === 'camara') this.abrirCamara();
+                            },
+
+                            abrirCamara() {
+                                this.detenerCamara();
+                                this.$wire.contenido = '';
+                                this.camara = 'abriendo';
+
+                                const iniciar = () => {
+                                    if (this.modo !== 'camara' || this.camara !== 'abriendo') return;
+
+                                    this.escaner = window.escanearQrConCamara(this.$refs.video, {
+                                        alIniciar: () => { this.camara = 'buscando' },
+                                        alDetectar: (texto) => {
+                                            this.escaner = null;
+                                            this.camara = 'leido';
+                                            this.usarTextoQr(texto, { analizarYa: true });
+                                        },
+                                        alError: (e) => {
+                                            this.escaner = null;
+                                            this.camara = e.codigo;
+                                        },
+                                        alAgotarTiempo: () => {
+                                            this.escaner = null;
+                                            this.camara = 'agotada';
+                                        },
+                                    });
+                                };
+
+                                window.escanearQrConCamara ? iniciar() : window.addEventListener('qr:listo', iniciar, { once: true });
+                            },
+
+                            detenerCamara() {
+                                this.escaner?.detener();
+                                this.escaner = null;
+                            },
+
+                            // Pestaña del navegador oculta, app minimizada o página que se va: la cámara no queda prendida.
+                            pausar() {
+                                if (this.camara === 'abriendo' || this.camara === 'buscando') {
+                                    this.detenerCamara();
+                                    this.camara = 'pausada';
+                                }
+                            },
+
+                            // Salir de la página (también con wire:navigate) o cambiar de pestaña del analizador.
+                            destroy() {
+                                this.detenerCamara();
+                            },
+                        }"
+                        x-on:analizador-cambio-tab.window="detenerCamara(); if (camara === 'abriendo' || camara === 'buscando') camara = ''"
+                        x-on:visibilitychange.document="document.hidden && pausar()"
+                        x-on:pagehide.window="pausar()"
+                        class="flex flex-col gap-3"
+                    >
+                        @php
+                            $claseModo = 'rounded-md px-3 py-2 text-sm font-medium transition focus:outline-none focus-visible:ring-2 focus-visible:ring-[#16a34a]';
+                            $claseModoActivo = 'bg-white text-[#12151a] shadow-sm';
+                            $claseModoInactivo = 'text-neutral-600 hover:text-neutral-900';
+                        @endphp
+                        <div role="group" aria-label="{{ __('Cómo querés leer el código QR') }}" class="grid grid-cols-2 gap-1 rounded-lg bg-neutral-100 p-1" data-test="modos-qr">
+                            <button
+                                type="button"
+                                x-on:click="elegirModo('imagen')"
+                                aria-pressed="true"
+                                :aria-pressed="(modo === 'imagen').toString()"
+                                class="{{ $claseModo }}"
+                                :class="modo === 'imagen' ? @js($claseModoActivo) : @js($claseModoInactivo)"
+                                data-test="modo-imagen"
+                            >
+                                {{ __('Subir imagen') }}
+                            </button>
+                            <button
+                                type="button"
+                                x-on:click="elegirModo('camara')"
+                                aria-pressed="false"
+                                :aria-pressed="(modo === 'camara').toString()"
+                                class="{{ $claseModo }}"
+                                :class="modo === 'camara' ? @js($claseModoActivo) : @js($claseModoInactivo)"
+                                data-test="modo-camara"
+                            >
+                                {{ __('Usar cámara') }}
+                            </button>
+                        </div>
+
+                        <div x-show="modo === 'imagen'" class="flex flex-col gap-2" data-test="qr-subida">
+                            <label
+                                for="archivo-qr"
+                                x-on:dragover.prevent="arrastrando = true"
+                                x-on:dragleave.prevent="arrastrando = false"
+                                x-on:drop.prevent="arrastrando = false; leer($event.dataTransfer.files[0])"
+                                :class="arrastrando && 'border-[#16a34a] bg-[#16a34a]/5'"
+                                class="{{ $zona }} cursor-pointer hover:border-[#16a34a] focus-within:ring-2 focus-within:ring-[#16a34a]/40"
+                            >
+                                <span class="{{ $iconoZona }}" aria-hidden="true">
+                                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" class="size-7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" focusable="false">{!! $iconos['camara'] !!}</svg>
+                                </span>
+                                <span id="qr-titulo" class="{{ $tituloZona }}">{{ __('Subí la foto del código QR') }}</span>
+                                <span class="{{ $ayudaZona }}">{{ __('Arrastrala acá o tocá para elegirla. En el celular también podés sacarla con la cámara.') }}</span>
+                                <span class="mt-2 inline-flex rounded-md bg-[#12151a] px-4 py-2 text-sm font-medium text-white" aria-hidden="true">{{ __('Elegir foto') }}</span>
+                                <input
+                                    id="archivo-qr"
+                                    type="file"
+                                    accept="image/*"
+                                    x-on:change="leer($event.target.files[0])"
+                                    aria-labelledby="qr-titulo"
+                                    aria-describedby="qr-ayuda qr-estado"
+                                    @error('contenido') aria-invalid="true" @enderror
+                                    class="sr-only"
+                                />
+                            </label>
+                            <p id="qr-ayuda" class="text-xs text-neutral-500">
+                                {{ __('La imagen se procesa en tu dispositivo: no se sube a ningún servidor.') }}
+                            </p>
+
+                            <div id="qr-estado" aria-live="polite" class="text-sm">
+                                <p x-show="estado === 'leyendo'" x-cloak class="text-neutral-600">{{ __('Leyendo el código…') }}</p>
+                                <p x-show="estado === 'sin-qr'" x-cloak class="text-red-700">{{ __('No encontramos un código QR en la imagen. Probá con una foto más nítida y de frente.') }}</p>
+                                <p x-show="estado === 'invalido'" x-cloak class="text-red-700">{{ __('No pudimos leer la imagen. Probá con otra foto.') }}</p>
+                            </div>
+                        </div>
+
+                        @php
+                            $botonPrincipal = 'rounded-md bg-[#12151a] px-4 py-2 text-sm font-medium text-white hover:bg-black focus:outline-none focus-visible:ring-2 focus-visible:ring-[#16a34a] focus-visible:ring-offset-2';
+                            $botonSecundario = 'rounded-md border border-neutral-300 bg-white px-4 py-2 text-sm font-medium text-neutral-800 hover:border-[#16a34a] hover:text-[#15803d] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#16a34a] focus-visible:ring-offset-2';
+                        @endphp
+                        {{-- Cámara en vivo. wire:ignore: los renders de Livewire (por ejemplo al volver el resultado) no tocan el video. --}}
+                        <div x-show="modo === 'camara'" x-cloak wire:ignore class="flex flex-col gap-3" data-test="qr-camara">
+                            <div x-show="camara === 'abriendo' || camara === 'buscando'" class="relative mx-auto aspect-square w-full max-w-sm overflow-hidden rounded-xl bg-[#12151a]">
+                                {{-- playsinline + muted: sin esto el iPhone no reproduce el video dentro de la página. --}}
+                                <video x-ref="video" playsinline muted autoplay aria-label="{{ __('Vista de la cámara') }}" class="size-full object-cover"></video>
+                                {{-- Guía para encuadrar el código. --}}
+                                <div class="pointer-events-none absolute inset-[18%]" aria-hidden="true">
+                                    <span class="absolute left-0 top-0 size-8 rounded-tl-lg border-l-4 border-t-4 border-[#22c55e]"></span>
+                                    <span class="absolute right-0 top-0 size-8 rounded-tr-lg border-r-4 border-t-4 border-[#22c55e]"></span>
+                                    <span class="absolute bottom-0 left-0 size-8 rounded-bl-lg border-b-4 border-l-4 border-[#22c55e]"></span>
+                                    <span class="absolute bottom-0 right-0 size-8 rounded-br-lg border-b-4 border-r-4 border-[#22c55e]"></span>
+                                </div>
+                                <p x-show="camara === 'abriendo'" class="absolute inset-x-0 top-1/2 -translate-y-1/2 px-6 text-center text-sm text-white">{{ __('Abriendo la cámara…') }}</p>
+                            </div>
+
+                            <div id="qr-camara-estado" aria-live="polite" class="text-center text-sm">
+                                <p x-show="camara === 'abriendo'" class="text-neutral-600">{{ __('Si el navegador te pregunta, permití el acceso a la cámara. El video no sale de tu dispositivo.') }}</p>
+                                <p x-show="camara === 'buscando'" class="inline-flex items-center gap-2 text-neutral-700">
+                                    <span class="size-2 shrink-0 animate-pulse rounded-full bg-[#16a34a]" aria-hidden="true"></span>
+                                    {{ __('Buscando un código QR… Apuntá al código y mantené el celular quieto.') }}
+                                </p>
+                                <p x-show="camara === 'leido'" class="text-[#15803d]">{{ __('Leímos el código y apagamos la cámara.') }}</p>
+                                <p x-show="camara === 'pausada'" class="text-neutral-600">{{ __('Apagamos la cámara porque saliste de la página. Tocá "Reanudar" para seguir.') }}</p>
+                                <p x-show="camara === 'agotada'" class="text-neutral-600">{{ __('No encontramos un código QR en un minuto y apagamos la cámara. Probá de nuevo con más luz o subí una foto.') }}</p>
+                                <p x-show="camara === 'inseguro'" class="text-red-700">{{ __('La cámara solo funciona si el sitio se abre con https. Podés subir una foto del QR.') }}</p>
+                                <p x-show="camara === 'sin-soporte'" class="text-red-700">{{ __('Tu navegador no permite usar la cámara acá. Podés subir una foto del QR.') }}</p>
+                                <p x-show="camara === 'permiso'" class="text-red-700">{{ __('No diste permiso para usar la cámara. Podés habilitarlo en la configuración del navegador o subir una foto.') }}</p>
+                                <p x-show="camara === 'sin-camara'" class="text-red-700">{{ __('No encontramos una cámara en este dispositivo. Podés subir una foto del QR.') }}</p>
+                                <p x-show="camara === 'ocupada'" class="text-red-700">{{ __('Otra app está usando la cámara. Cerrala y probá de nuevo.') }}</p>
+                                <p x-show="camara === 'error'" class="text-red-700">{{ __('No pudimos abrir la cámara. Probá de nuevo o subí una foto.') }}</p>
+                            </div>
+
+                            <div class="flex flex-wrap justify-center gap-2">
+                                <button x-show="camara === 'abriendo' || camara === 'buscando'" type="button" x-on:click="detenerCamara(); camara = ''" class="{{ $botonSecundario }}" data-test="detener-camara">
+                                    {{ __('Detener cámara') }}
+                                </button>
+                                <button x-show="camara === ''" type="button" x-on:click="abrirCamara()" class="{{ $botonPrincipal }}">
+                                    {{ __('Abrir cámara') }}
+                                </button>
+                                <button x-show="camara === 'leido'" type="button" x-on:click="abrirCamara()" class="{{ $botonPrincipal }}" data-test="escanear-otro">
+                                    {{ __('Escanear otro') }}
+                                </button>
+                                <button x-show="camara === 'pausada'" type="button" x-on:click="abrirCamara()" class="{{ $botonPrincipal }}">
+                                    {{ __('Reanudar') }}
+                                </button>
+                                <button x-show="['agotada', 'permiso', 'ocupada', 'error'].includes(camara)" type="button" x-on:click="abrirCamara()" class="{{ $botonPrincipal }}">
+                                    {{ __('Probar de nuevo') }}
+                                </button>
+                                <button x-show="['agotada', 'inseguro', 'sin-soporte', 'permiso', 'sin-camara', 'ocupada', 'error'].includes(camara)" type="button" x-on:click="elegirModo('imagen')" class="{{ $botonSecundario }}">
+                                    {{ __('Subir una foto') }}
+                                </button>
+                            </div>
                         </div>
 
                         <div x-show="$wire.contenido" x-cloak class="rounded-md border border-neutral-200 bg-neutral-50 p-3">
