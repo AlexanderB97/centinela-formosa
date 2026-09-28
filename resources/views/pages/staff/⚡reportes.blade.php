@@ -229,7 +229,7 @@ new #[Layout('layouts::staff')] #[Title('Reportes')] class extends Component {
     @forelse ($this->pendientes as $reporte)
         @php
             $analisis = $reporte['analisis'];
-            $tipos = ['texto' => __('Texto'), 'link' => __('Link'), 'qr' => __('Foto de QR')];
+            $tipos = ['texto' => __('Texto'), 'link' => __('Link'), 'qr' => __('Foto de QR'), 'archivo' => __('Archivo')];
             $niveles = [
                 'riesgo' => ['etiqueta' => __('Riesgo'), 'clase' => 'bg-red-100 text-red-800'],
                 'dudoso' => ['etiqueta' => __('Dudoso'), 'clase' => 'bg-yellow-100 text-yellow-900'],
@@ -262,7 +262,9 @@ new #[Layout('layouts::staff')] #[Title('Reportes')] class extends Component {
             <div class="mt-2 rounded-md border border-neutral-200 bg-neutral-50 p-3">
                 <p class="whitespace-pre-wrap break-words font-mono text-sm text-neutral-900">{{ $analisis['contenido'] }}</p>
             </div>
-            @if ($analisis['tipo'] !== 'texto')
+            @if ($analisis['tipo'] === 'archivo')
+                <p class="mt-1 text-xs text-neutral-500">{{ __('Huella SHA-256 del archivo. El archivo nunca se subió ni se guardó: solo se calculó su huella en el dispositivo de quien lo analizó.') }}</p>
+            @elseif ($analisis['tipo'] !== 'texto')
                 <p class="mt-1 text-xs text-neutral-500">{{ __('El enlace se muestra como texto y no es clickeable, por seguridad.') }}</p>
             @endif
 

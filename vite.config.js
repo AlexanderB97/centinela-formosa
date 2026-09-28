@@ -12,6 +12,7 @@ export default defineConfig({
                 'resources/js/passkeys.js',
                 'resources/js/qr.js',
                 'resources/js/mapa.js',
+                'resources/js/archivo.js',
             ],
             refresh: true,
             fonts: [

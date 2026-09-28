@@ -3,10 +3,14 @@
 use App\Enums\Barrio;
 use App\Enums\Departamento;
 use App\Enums\MedioRecepcion;
+use App\Enums\TipoContenido;
 use App\Http\Requests\ReportarRequest;
 use App\Models\Analisis;
+use App\Services\Analisis\VirusTotalNoDisponible;
+use App\Services\EscanerDeArchivos;
 use App\Services\ReportarAnalisis;
 use App\Services\RiskAnalyzer;
+use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
@@ -25,7 +29,9 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
      * { nivel: 'seguro'|'dudoso'|'riesgo', razones: string[], explicacion: string, explicacion_generada_por_ia: bool, analisis_id: int|null }
      * `analisis_id` es null si backend no pudo guardar el análisis; en ese caso no se puede reportar.
      *
-     * @var array{nivel: string, razones: array<int, string>, explicacion: string, explicacion_generada_por_ia: bool, analisis_id: int|null}|null
+     * Los archivos agregan `sin_coincidencias`: true cuando VirusTotal no conoce la huella.
+     *
+     * @var array{nivel: string, razones: array<int, string>, explicacion: string, explicacion_generada_por_ia: bool, analisis_id: int|null, sin_coincidencias?: bool}|null
      */
     #[Locked]
     public ?array $resultado = null;
@@ -58,7 +64,7 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
 
     public function seleccionarTipo(string $tipo): void
     {
-        if (! in_array($tipo, ['texto', 'link', 'qr'], true)) {
+        if (! in_array($tipo, ['texto', 'link', 'qr', 'archivo'], true)) {
             return;
         }
 
@@ -73,20 +79,33 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
 
         // MOCK: reglas que imitan el 422 del contrato. Backend define las definitivas.
         $this->validate([
-            'tipo' => ['required', Rule::in(['texto', 'link', 'qr'])],
-            'contenido' => array_filter(['required', 'string', 'max:5000', $this->tipo === 'link' ? 'url' : null]),
+            'tipo' => ['required', Rule::in(['texto', 'link', 'qr', 'archivo'])],
+            'contenido' => $this->tipo === 'archivo'
+                // Only the SHA-256 computed in the browser arrives here, never the file.
+                ? ['required', 'string', 'regex:/^[a-f0-9]{64}$/']
+                : array_filter(['required', 'string', 'max:5000', $this->tipo === 'link' ? 'url' : null]),
         ], [
             'tipo.required' => 'Elegí qué querés analizar.',
             'tipo.in' => 'El tipo de contenido no es válido.',
             'contenido.required' => match ($this->tipo) {
                 'link' => 'Pegá el link que querés analizar.',
                 'qr' => 'Primero subí una foto con un código QR.',
+                'archivo' => 'Primero elegí el archivo que querés revisar.',
                 default => 'Pegá el mensaje que querés analizar.',
             },
+            'contenido.regex' => 'No pudimos calcular la huella del archivo. Probá elegirlo de nuevo.',
             'contenido.max' => 'El contenido no puede superar los 5000 caracteres.',
             'contenido.url' => 'Ingresá un link completo, por ejemplo https://ejemplo.com.',
         ]);
 
+        if ($this->tipo === TipoContenido::Archivo->value) {
+            $this->escanearArchivo();
+
+            return;
+        }
+
+        // PENDIENTE (tarea aparte): el análisis de texto/link desde este componente no tiene rate
+        // limit; solo POST /analizar lo tiene (throttle:analizar). El escáner de archivos sí lo tiene.
         try {
             // Misma lógica que POST /analizar; incluye el analisis_id real de la fila guardada.
             $this->resultado = app(RiskAnalyzer::class)->analizar($this->tipo, $this->contenido)->toArray();
@@ -94,6 +113,46 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
             report($e);
             $this->error = true;
         }
+    }
+
+    /**
+     * Máximo de escaneos de archivos por minuto y por IP: comparte la cuota de VirusTotal con los links.
+     */
+    private const MAXIMO_ESCANEOS_POR_MINUTO = 4;
+
+    /**
+     * Escanea un archivo por su huella (ya validada): nunca recibe el archivo.
+     */
+    private function escanearArchivo(): void
+    {
+        $clave = 'escaner-archivos:'.request()->ip();
+
+        if (RateLimiter::tooManyAttempts($clave, self::MAXIMO_ESCANEOS_POR_MINUTO)) {
+            $this->addError('contenido', 'Hiciste muchas consultas de archivos seguidas. Esperá un minuto y probá de nuevo.');
+
+            return;
+        }
+
+        RateLimiter::hit($clave, 60);
+
+        try {
+            $resultado = app(EscanerDeArchivos::class)->analizar($this->contenido);
+        } catch (VirusTotalNoDisponible) {
+            // Expected (no key, timeout, quota): the client already logged why. Nothing is stored.
+            $this->error = true;
+
+            return;
+        } catch (Throwable $e) {
+            report($e);
+            $this->error = true;
+
+            return;
+        }
+
+        $this->resultado = [
+            ...$resultado->toArray(),
+            'sin_coincidencias' => $resultado->razones === [EscanerDeArchivos::RAZON_SIN_COINCIDENCIAS],
+        ];
     }
 
     public function abrirReporte(): void
@@ -327,6 +386,7 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
             'qr' => '<rect x="4" y="4" width="6" height="6" rx="1" /><rect x="14" y="4" width="6" height="6" rx="1" /><rect x="4" y="14" width="6" height="6" rx="1" /><path d="M14 14h2v2M20 14v2M14 20h6M18 18v2" />',
             'documento' => '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5Z" /><path d="M14 3v5h5M9 13h6M9 17h4" />',
             'camara' => '<path d="M4 8h3l2-3h6l2 3h3v11H4V8Z" /><circle cx="12" cy="13" r="3.5" />',
+            'archivo' => '<path d="m20 11.5-8.2 8.2a5.3 5.3 0 0 1-7.5-7.5l8.2-8.2a3.5 3.5 0 0 1 5 5l-8.2 8.2a1.8 1.8 0 0 1-2.5-2.5l7.5-7.5" />',
         ];
 
         // Ejemplos inventados a partir de patrones reales de estafa; se cargan en el campo, no se analizan solos.
@@ -367,7 +427,7 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
             x-on:keydown.arrow-left.prevent="mover(-1)"
             class="flex border-b border-neutral-200 px-2 sm:px-4"
         >
-            @foreach (['texto' => __('Texto'), 'link' => __('Link'), 'qr' => __('Foto de QR')] as $valor => $etiqueta)
+            @foreach (['texto' => __('Texto'), 'link' => __('Link'), 'qr' => __('Foto de QR'), 'archivo' => __('Archivo')] as $valor => $etiqueta)
                 <button
                     type="button"
                     role="tab"
@@ -386,7 +446,7 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
                     ])
                 >
                     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false" @class([
-                        'size-5 shrink-0',
+                        'hidden size-5 shrink-0 sm:block',
                         'text-[#16a34a]' => $tipo === $valor,
                         'text-neutral-400 group-hover:text-neutral-600' => $tipo !== $valor,
                     ])>{!! $iconos[$valor] !!}</svg>
@@ -448,7 +508,7 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
                             class="{{ $claseCampo }}"
                         />
                     </div>
-                @else
+                @elseif ($tipo === 'qr')
                     {{-- La imagen se decodifica en el navegador con jsQR: no tiene wire:model, así que nunca se sube. --}}
                     <div
                         x-data="{
@@ -515,6 +575,81 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
                             <p class="mt-1 break-all font-mono text-sm text-neutral-900" x-text="$wire.contenido"></p>
                         </div>
                     </div>
+                @else
+                    {{-- Escáner por huella: el navegador calcula el SHA-256 y solo se manda ese texto. El input no tiene wire:model: el archivo nunca se sube. --}}
+                    <div
+                        x-data="{
+                            estado: '',
+                            nombre: '',
+                            arrastrando: false,
+                            async leer(archivo) {
+                                this.$wire.contenido = '';
+                                this.nombre = '';
+
+                                if (! archivo) {
+                                    this.estado = '';
+                                    return;
+                                }
+
+                                this.estado = 'calculando';
+
+                                try {
+                                    this.$wire.contenido = await window.calcularHuellaDeArchivo(archivo);
+                                    this.nombre = archivo.name;
+                                    this.estado = 'ok';
+                                } catch (e) {
+                                    this.estado = e.codigo ?? 'error';
+                                }
+                            },
+                        }"
+                        class="flex flex-col gap-2"
+                    >
+                        <label
+                            for="archivo-escaner"
+                            x-on:dragover.prevent="arrastrando = true"
+                            x-on:dragleave.prevent="arrastrando = false"
+                            x-on:drop.prevent="arrastrando = false; leer($event.dataTransfer.files[0])"
+                            :class="arrastrando && 'border-[#16a34a] bg-[#16a34a]/5'"
+                            class="{{ $zona }} cursor-pointer hover:border-[#16a34a] focus-within:ring-2 focus-within:ring-[#16a34a]/40"
+                        >
+                            <span class="{{ $iconoZona }}" aria-hidden="true">
+                                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" class="size-7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" focusable="false">{!! $iconos['documento'] !!}</svg>
+                            </span>
+                            <span id="archivo-titulo" class="{{ $tituloZona }}">{{ __('Elegí el archivo que te mandaron') }}</span>
+                            <span class="{{ $ayudaZona }}">{{ __('PDF, Word, Excel o imagen (JPG, PNG) de hasta 10 MB. Arrastralo acá o tocá para elegirlo.') }}</span>
+                            <span class="mt-2 inline-flex rounded-md bg-[#12151a] px-4 py-2 text-sm font-medium text-white" aria-hidden="true">{{ __('Elegir archivo') }}</span>
+                            <input
+                                id="archivo-escaner"
+                                type="file"
+                                accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png"
+                                x-on:change="leer($event.target.files[0])"
+                                aria-labelledby="archivo-titulo"
+                                aria-describedby="archivo-ayuda archivo-estado"
+                                @error('contenido') aria-invalid="true" @enderror
+                                class="sr-only"
+                            />
+                        </label>
+                        <p id="archivo-ayuda" class="text-xs text-neutral-500">
+                            {{ __('El archivo no se sube a ningún lado: calculamos su huella (SHA-256) en tu dispositivo y consultamos solo esa huella en VirusTotal.') }}
+                        </p>
+
+                        <div id="archivo-estado" aria-live="polite" class="text-sm">
+                            <p x-show="estado === 'calculando'" x-cloak class="text-neutral-600">{{ __('Calculando la huella del archivo…') }}</p>
+                            <p x-show="estado === 'tipo'" x-cloak class="text-red-700">{{ __('Ese tipo de archivo no está admitido. Probá con PDF, Word, Excel, JPG o PNG.') }}</p>
+                            <p x-show="estado === 'tamano'" x-cloak class="text-red-700">{{ __('El archivo supera los 10 MB.') }}</p>
+                            <p x-show="estado === 'vacio'" x-cloak class="text-red-700">{{ __('El archivo está vacío.') }}</p>
+                            <p x-show="estado === 'contenido'" x-cloak class="text-red-700">{{ __('El contenido del archivo no corresponde a su extensión. Tené cuidado: a veces se cambia la extensión para disfrazar un archivo peligroso.') }}</p>
+                            <p x-show="estado === 'sin-soporte'" x-cloak class="text-red-700">{{ __('Tu navegador no permite calcular la huella en esta página. Probá con un navegador actualizado.') }}</p>
+                            <p x-show="estado === 'error'" x-cloak class="text-red-700">{{ __('No pudimos leer el archivo. Probá de nuevo.') }}</p>
+                        </div>
+
+                        <div x-show="$wire.contenido" x-cloak class="rounded-md border border-neutral-200 bg-neutral-50 p-3">
+                            <p class="text-xs font-medium text-neutral-600">
+                                {{ __('Huella calculada en tu dispositivo') }}<span x-show="nombre" x-text="' · ' + nombre"></span>
+                            </p>
+                            <p class="mt-1 break-all font-mono text-sm text-neutral-900" x-text="$wire.contenido"></p>
+                        </div>
+                    </div>
                 @endif
 
                 @if ($errors->hasAny(['tipo', 'contenido']))
@@ -524,7 +659,7 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
                 @endif
 
                 <div class="flex flex-col-reverse gap-3 sm:flex-row sm:items-center sm:justify-end">
-                    @if ($tipo !== 'qr')
+                    @if (in_array($tipo, ['texto', 'link'], true))
                         <button
                             type="button"
                             x-on:click="ejemplosAbiertos = ! ejemplosAbiertos"
@@ -556,7 +691,7 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
                     </button>
                 </div>
 
-                @if ($tipo !== 'qr')
+                @if (in_array($tipo, ['texto', 'link'], true))
                     <div id="ejemplos" x-show="ejemplosAbiertos" x-cloak class="rounded-lg border border-neutral-200 bg-neutral-50 p-4">
                         <p class="text-sm font-semibold text-neutral-900">{{ __('Ejemplos de estafas comunes') }}</p>
                         <p class="mt-1 text-xs text-neutral-500">{{ __('Son ejemplos inventados a partir de patrones reales. Elegí uno para cargarlo y después tocá Analizar.') }}</p>
@@ -644,6 +779,11 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
                         ];
                         $nivel = $resultado['nivel'];
                         $estilo = $semaforo[$nivel];
+
+                        // Archivo que VirusTotal no conoce: se guarda como dudoso, pero se nombra por lo que es.
+                        if ($resultado['sin_coincidencias'] ?? false) {
+                            $estilo = [...$estilo, 'etiqueta' => __('Sin coincidencias conocidas'), 'resumen' => __('VirusTotal no tiene registros de este archivo.')];
+                        }
                     @endphp
 
                     <article data-nivel="{{ $nivel }}" aria-labelledby="resultado-titulo" class="rounded-xl border-l-8 bg-white p-6 shadow-sm {{ $estilo['borde'] }}">
@@ -888,6 +1028,7 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
 
 @assets
     @vite('resources/js/qr.js')
+    @vite('resources/js/archivo.js')
 @endassets
 
 @script
