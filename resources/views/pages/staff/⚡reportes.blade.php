@@ -104,6 +104,7 @@ new #[Layout('layouts::staff')] #[Title('Reportes')] class extends Component {
                 'id' => $reporte->id,
                 'comentario' => $reporte->comentario,
                 'departamento' => $reporte->departamento?->etiqueta(),
+                'barrio' => $reporte->barrio?->etiqueta(),
                 'medio' => $reporte->medio?->etiqueta(),
                 'estado' => $reporte->estado->value,
                 'analisis' => [
@@ -285,6 +286,13 @@ new #[Layout('layouts::staff')] #[Title('Reportes')] class extends Component {
             {{-- Contexto opcional del mensaje: dónde y por dónde llegó. No identifica a quien reportó. --}}
             <dl class="mt-3 flex flex-wrap gap-x-6 gap-y-1 text-sm" data-test="contexto-{{ $reporte['id'] }}">
                 @foreach (['departamento' => __('Departamento'), 'medio' => __('Medio')] as $campo => $etiqueta)
+                    @if ($campo === 'medio' && filled($reporte['barrio'] ?? null))
+                        {{-- El barrio solo existe en Formosa Capital: se muestra cuando está, sin "No especificado". --}}
+                        <div class="flex gap-1">
+                            <dt class="font-semibold text-neutral-900">{{ __('Barrio') }}:</dt>
+                            <dd class="text-neutral-800">{{ $reporte['barrio'] }}</dd>
+                        </div>
+                    @endif
                     <div class="flex gap-1">
                         <dt class="font-semibold text-neutral-900">{{ $etiqueta }}:</dt>
                         @if (filled($reporte[$campo] ?? null))

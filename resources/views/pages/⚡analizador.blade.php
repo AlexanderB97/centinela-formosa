@@ -1,5 +1,6 @@
 <?php
 
+use App\Enums\Barrio;
 use App\Enums\Departamento;
 use App\Enums\MedioRecepcion;
 use App\Http\Requests\ReportarRequest;
@@ -48,6 +49,9 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
     public string $departamento = '';
     public string $medio = '';
 
+    /** Barrio de Formosa Capital: solo se ofrece (y solo vale) si el departamento es formosa_capital. */
+    public string $barrio = '';
+
     /** Mensaje del último reporte y su tipo: 'exito' (201), 'aviso' (422) o 'error' (falla del envío). */
     public ?string $avisoReporte = null;
     public ?string $tipoAviso = null;
@@ -59,13 +63,13 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
         }
 
         $this->tipo = $tipo;
-        $this->reset('contenido', 'resultado', 'error', 'reporteAbierto', 'comentario', 'departamento', 'medio', 'avisoReporte', 'tipoAviso');
+        $this->reset('contenido', 'resultado', 'error', 'reporteAbierto', 'comentario', 'departamento', 'medio', 'barrio', 'avisoReporte', 'tipoAviso');
         $this->resetValidation();
     }
 
     public function analizar(): void
     {
-        $this->reset('resultado', 'error', 'reporteAbierto', 'comentario', 'departamento', 'medio', 'avisoReporte', 'tipoAviso');
+        $this->reset('resultado', 'error', 'reporteAbierto', 'comentario', 'departamento', 'medio', 'barrio', 'avisoReporte', 'tipoAviso');
 
         // MOCK: reglas que imitan el 422 del contrato. Backend define las definitivas.
         $this->validate([
@@ -99,14 +103,25 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
         }
 
         $this->reporteAbierto = true;
-        $this->reset('comentario', 'departamento', 'medio', 'avisoReporte', 'tipoAviso');
-        $this->resetValidation(['comentario', 'departamento', 'medio']);
+        $this->reset('comentario', 'departamento', 'medio', 'barrio', 'avisoReporte', 'tipoAviso');
+        $this->resetValidation(['comentario', 'departamento', 'medio', 'barrio']);
+    }
+
+    /**
+     * Si el departamento deja de ser Formosa Capital, el barrio elegido ya no aplica.
+     */
+    public function updatedDepartamento(): void
+    {
+        if ($this->departamento !== Departamento::FormosaCapital->value) {
+            $this->reset('barrio');
+            $this->resetValidation('barrio');
+        }
     }
 
     public function cerrarReporte(): void
     {
-        $this->reset('reporteAbierto', 'comentario', 'departamento', 'medio', 'avisoReporte', 'tipoAviso');
-        $this->resetValidation(['comentario', 'departamento', 'medio']);
+        $this->reset('reporteAbierto', 'comentario', 'departamento', 'medio', 'barrio', 'avisoReporte', 'tipoAviso');
+        $this->resetValidation(['comentario', 'departamento', 'medio', 'barrio']);
     }
 
     public function reportar(): void
@@ -123,6 +138,7 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
             'comentario' => $reglas['comentario'],
             'departamento' => $reglas['departamento'],
             'medio' => $reglas['medio'],
+            'barrio' => $reglas['barrio'],
         ], $mensajes);
 
         try {
@@ -134,12 +150,13 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
                 $this->comentario,
                 Departamento::tryFrom($this->departamento),
                 MedioRecepcion::tryFrom($this->medio),
+                Barrio::tryFrom($this->barrio),
             );
         } catch (ValidationException $e) {
             // 422 del contrato (análisis inexistente o ya reportado): aviso calmo, no un error.
             $this->tipoAviso = 'aviso';
             $this->avisoReporte = collect($e->errors())->flatten()->first();
-            $this->reset('reporteAbierto', 'comentario', 'departamento', 'medio');
+            $this->reset('reporteAbierto', 'comentario', 'departamento', 'medio', 'barrio');
 
             return;
         } catch (Throwable $e) {
@@ -152,7 +169,7 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
 
         $this->tipoAviso = 'exito';
         $this->avisoReporte = ReportarAnalisis::MENSAJE_EXITO;
-        $this->reset('reporteAbierto', 'comentario', 'departamento', 'medio');
+        $this->reset('reporteAbierto', 'comentario', 'departamento', 'medio', 'barrio');
     }
 
     // DEPRECATED: ya no se usa, ReportarAnalisis real lo reemplaza. Se deja como referencia.
@@ -743,7 +760,7 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
                                                 <label for="departamento-reporte" class="text-sm font-medium text-neutral-800">{{ __('Departamento (opcional)') }}</label>
                                                 <select
                                                     id="departamento-reporte"
-                                                    wire:model="departamento"
+                                                    wire:model.live="departamento"
                                                     aria-describedby="contexto-ayuda @error('departamento') departamento-error @enderror"
                                                     @error('departamento') aria-invalid="true" @enderror
                                                     class="{{ $claseSelect }}"
@@ -777,6 +794,31 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
                                                 @enderror
                                             </div>
                                         </div>
+                                        {{-- El barrio solo aplica a Formosa Capital: lo decide el servidor con el departamento elegido. --}}
+                                        @if ($departamento === \App\Enums\Departamento::FormosaCapital->value)
+                                            <div class="flex flex-col gap-2" wire:key="campo-barrio" data-test="campo-barrio">
+                                                <label for="barrio-reporte" class="text-sm font-medium text-neutral-800">{{ __('Barrio (si es en la capital)') }}</label>
+                                                <select
+                                                    id="barrio-reporte"
+                                                    wire:model="barrio"
+                                                    aria-describedby="contexto-ayuda @error('barrio') barrio-error @enderror"
+                                                    @error('barrio') aria-invalid="true" @enderror
+                                                    class="{{ $claseSelect }}"
+                                                >
+                                                    <option value="">{{ __('Prefiero no decir') }}</option>
+                                                    @foreach (\App\Enums\Barrio::porZona() as $zona => $barrios)
+                                                        <optgroup label="{{ $zona }}">
+                                                            @foreach ($barrios as $opcion)
+                                                                <option value="{{ $opcion->value }}">{{ $opcion->etiqueta() }}</option>
+                                                            @endforeach
+                                                        </optgroup>
+                                                    @endforeach
+                                                </select>
+                                                @error('barrio')
+                                                    <p id="barrio-error" class="text-sm text-red-700">{{ $message }}</p>
+                                                @enderror
+                                            </div>
+                                        @endif
                                         <p id="contexto-ayuda" class="-mt-1 text-xs text-neutral-500">
                                             {{ __('Son opcionales y no te identifican: nos ayudan a saber dónde y por dónde circulan las estafas.') }}
                                         </p>

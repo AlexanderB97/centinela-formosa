@@ -1,5 +1,6 @@
 <?php
 
+use App\Enums\Barrio;
 use App\Enums\Departamento;
 use App\Enums\EstadoReporte;
 use App\Enums\MedioRecepcion;
@@ -258,4 +259,72 @@ test('department and channel are cleared when the report is closed or a new anal
         ->set('departamento', 'bermejo')
         ->call('analizar')
         ->assertSet('departamento', '');
+});
+
+test('the neighborhood select only appears when the department is Formosa Capital', function () {
+    $componente = analizarAlgo()->call('abrirReporte');
+
+    $componente->assertDontSeeHtml('id="barrio-reporte"');
+
+    $componente->set('departamento', 'pirane')->assertDontSeeHtml('id="barrio-reporte"');
+
+    $componente->set('departamento', 'formosa_capital')
+        ->assertSeeHtml('id="barrio-reporte"')
+        ->assertSee('Barrio (si es en la capital)')
+        ->assertSee('8 de Octubre')
+        ->assertSee('Bernardino Rivadavia (Lote 4)');
+});
+
+test('changing the department away from the capital clears the chosen neighborhood', function () {
+    analizarAlgo()
+        ->call('abrirReporte')
+        ->set('departamento', 'formosa_capital')
+        ->set('barrio', 'san_martin')
+        ->assertSet('barrio', 'san_martin')
+        ->set('departamento', 'bermejo')
+        ->assertSet('barrio', '')
+        ->assertDontSeeHtml('id="barrio-reporte"');
+});
+
+test('a report from the capital can be sent with its neighborhood', function () {
+    analizarAlgo()
+        ->call('abrirReporte')
+        ->set('departamento', 'formosa_capital')
+        ->set('barrio', 'lote_111')
+        ->call('reportar')
+        ->assertHasNoErrors()
+        ->assertSet('tipoAviso', 'exito')
+        ->assertSet('barrio', '');
+
+    expect(Reporte::sole()->barrio)->toBe(Barrio::Lote111)
+        ->and(Reporte::sole()->departamento)->toBe(Departamento::FormosaCapital);
+});
+
+test('a neighborhood without the capital is rejected even if forced', function () {
+    analizarAlgo()
+        ->call('abrirReporte')
+        ->set('barrio', 'guadalupe')
+        ->call('reportar')
+        ->assertHasErrors(['barrio'])
+        ->assertSet('reporteAbierto', true);
+
+    expect(Reporte::count())->toBe(0);
+});
+
+test('the neighborhood select groups the sixty neighborhoods by zone, with the empty option first', function () {
+    $html = analizarAlgo()
+        ->call('abrirReporte')
+        ->set('departamento', 'formosa_capital')
+        ->html();
+
+    preg_match('~<select[^>]*id="barrio-reporte".*?</select>~s', $html, $select);
+    expect($select)->not->toBeEmpty();
+    $select = $select[0];
+
+    preg_match_all('~<optgroup label="([^"]+)">~', $select, $grupos);
+    expect($grupos[1])->toBe(['Centro y Alrededores', 'Zona Norte y Circuito 5', 'Zona Oeste y Sudoeste', 'Zona Sur y Expansión', 'Otros Sectores']);
+
+    // "Prefiero no decir" is outside every group, before the first one.
+    expect(strpos($select, 'Prefiero no decir'))->toBeLessThan(strpos($select, '<optgroup'))
+        ->and(substr_count($select, '<option value="'))->toBe(61);
 });
