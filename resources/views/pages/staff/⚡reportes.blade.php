@@ -103,6 +103,9 @@ new #[Layout('layouts::staff')] #[Title('Reportes')] class extends Component {
             ->map(fn (Reporte $reporte) => [
                 'id' => $reporte->id,
                 'comentario' => $reporte->comentario,
+                'departamento' => $reporte->departamento?->etiqueta(),
+                'barrio' => $reporte->barrio?->etiqueta(),
+                'medio' => $reporte->medio?->etiqueta(),
                 'estado' => $reporte->estado->value,
                 'analisis' => [
                     'tipo' => $reporte->analisis->tipo->value,
@@ -279,6 +282,27 @@ new #[Layout('layouts::staff')] #[Title('Reportes')] class extends Component {
             @else
                 <p class="mt-2 text-sm italic text-neutral-500">{{ __('Sin comentario') }}</p>
             @endif
+
+            {{-- Contexto opcional del mensaje: dónde y por dónde llegó. No identifica a quien reportó. --}}
+            <dl class="mt-3 flex flex-wrap gap-x-6 gap-y-1 text-sm" data-test="contexto-{{ $reporte['id'] }}">
+                @foreach (['departamento' => __('Departamento'), 'medio' => __('Medio')] as $campo => $etiqueta)
+                    @if ($campo === 'medio' && filled($reporte['barrio'] ?? null))
+                        {{-- El barrio solo existe en Formosa Capital: se muestra cuando está, sin "No especificado". --}}
+                        <div class="flex gap-1">
+                            <dt class="font-semibold text-neutral-900">{{ __('Barrio') }}:</dt>
+                            <dd class="text-neutral-800">{{ $reporte['barrio'] }}</dd>
+                        </div>
+                    @endif
+                    <div class="flex gap-1">
+                        <dt class="font-semibold text-neutral-900">{{ $etiqueta }}:</dt>
+                        @if (filled($reporte[$campo] ?? null))
+                            <dd class="text-neutral-800">{{ $reporte[$campo] }}</dd>
+                        @else
+                            <dd class="italic text-neutral-500">{{ __('No especificado') }}</dd>
+                        @endif
+                    </div>
+                @endforeach
+            </dl>
 
             <div class="mt-6 flex flex-col-reverse gap-2 border-t border-neutral-200 pt-4 sm:flex-row sm:justify-end">
                 <button
