@@ -73,6 +73,38 @@ test('large images are scaled down to the stored width', function () {
     expect($ancho)->toBe(ImagenDeNoticia::ANCHO_GUARDADO)->and($alto)->toBe(800);
 });
 
+test('if GD cannot scale a large image, nothing is stored and a clear message is shown', function () {
+    // imagescale() only fails on rare conditions (e.g. out of memory), so the service is replaced by one where it fails.
+    app()->instance(ImagenDeNoticia::class, new class extends ImagenDeNoticia
+    {
+        protected function escalar(GdImage $imagen, int $ancho): GdImage|false
+        {
+            return false;
+        }
+    });
+
+    guardarNoticiaConImagen(UploadedFile::fake()->image('grande.jpg', ImagenDeNoticia::ANCHO_GUARDADO + 1, 100))
+        ->assertHasErrors('imagen')
+        ->assertSee('No pudimos procesar la imagen. Probá con otra.');
+
+    expect(Noticia::count())->toBe(0)
+        ->and(Storage::disk(ImagenDeNoticia::DISCO)->allFiles(ImagenDeNoticia::CARPETA))->toBe([]);
+});
+
+test('images that fit the stored width are not scaled at all', function () {
+    app()->instance(ImagenDeNoticia::class, new class extends ImagenDeNoticia
+    {
+        protected function escalar(GdImage $imagen, int $ancho): GdImage|false
+        {
+            throw new LogicException('No debería escalar una imagen que ya entra.');
+        }
+    });
+
+    guardarNoticiaConImagen(UploadedFile::fake()->image('justa.jpg', ImagenDeNoticia::ANCHO_GUARDADO, 100))->assertHasNoErrors();
+
+    expect(Noticia::sole()->imagen_ruta)->not->toBeNull();
+});
+
 test('only real JPG, PNG or WebP images are accepted', function (Closure $archivo) {
     guardarNoticiaConImagen($archivo())
         ->assertHasErrors('imagen')

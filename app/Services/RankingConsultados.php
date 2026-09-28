@@ -44,19 +44,26 @@ class RankingConsultados
             ->pluck('huella')
             ->flip();
 
-        return $grupos->map(fn (Collection $grupo) => $grupo->map(fn (object $fila) => [
-            'contenido' => Enmascarador::contenido((string) $contenidos[$fila->ultimo_id]),
-            'veces' => (int) $fila->veces,
+        $lista = fn (TipoContenido $tipo) => array_values($grupos[$tipo->value]->map(fn (array $fila) => [
+            'contenido' => Enmascarador::contenido((string) $contenidos[$fila['ultimo_id']]),
+            'veces' => $fila['veces'],
             // Highest level ever detected for this content: errs on the side of caution.
-            'nivel' => (int) $fila->en_riesgo > 0 ? NivelRiesgo::Riesgo->value : NivelRiesgo::Dudoso->value,
-            'confirmado' => $confirmadas->has($fila->huella),
-        ])->values()->all())->all();
+            'nivel' => $fila['en_riesgo'] > 0 ? NivelRiesgo::Riesgo->value : NivelRiesgo::Dudoso->value,
+            'confirmado' => $confirmadas->has($fila['huella']),
+        ])->all());
+
+        return [
+            'texto' => $lista(TipoContenido::Texto),
+            'link' => $lista(TipoContenido::Link),
+            'qr' => $lista(TipoContenido::Qr),
+        ];
     }
 
     /**
      * One grouped query per type. "seguro"-only content is filtered in SQL, before the LIMIT.
+     * Aggregates come back as strings on some drivers, so they are cast here, once.
      *
-     * @return Collection<int, object{huella: string, veces: int, ultimo_id: int, en_riesgo: int}>
+     * @return Collection<int, array{huella: string, veces: int, ultimo_id: int, en_riesgo: int}>
      */
     private function topPorTipo(TipoContenido $tipo): Collection
     {
@@ -73,6 +80,12 @@ class RankingConsultados
             ->orderByDesc('veces')
             ->orderByDesc('ultimo_id')
             ->limit(self::LIMITE)
-            ->get();
+            ->get()
+            ->map(fn (object $fila) => [
+                'huella' => (string) $fila->huella,
+                'veces' => (int) $fila->veces,
+                'ultimo_id' => (int) $fila->ultimo_id,
+                'en_riesgo' => (int) $fila->en_riesgo,
+            ]);
     }
 }

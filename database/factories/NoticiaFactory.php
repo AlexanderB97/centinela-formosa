@@ -21,7 +21,8 @@ class NoticiaFactory extends Factory
     {
         return [
             'titulo' => fake()->sentence(6),
-            'cuerpo' => implode("\n\n", fake()->paragraphs(3)),
+            // asText: true returns the paragraphs already joined, so the type is always a string.
+            'cuerpo' => fake()->paragraphs(3, asText: true),
             'imagen_ruta' => null,
             'estado' => EstadoNoticia::Borrador,
             'publicada_en' => null,
