@@ -11,12 +11,16 @@ use Illuminate\Support\Facades\Log;
 use Throwable;
 
 /**
- * Looks up the existing VirusTotal report of a URL. Never throws: any failure
- * (timeout, HTTP error, bad payload) returns null so the analysis keeps going.
+ * Looks up existing VirusTotal reports of URLs and file hashes. Never throws: any failure
+ * (timeout, HTTP error, quota exceeded, bad payload) returns null so the caller decides.
+ *
+ * Files are only ever looked up by their SHA-256 hash: nothing is uploaded to VirusTotal.
  */
 class VirusTotalClient
 {
-    private const ENDPOINT = 'https://www.virustotal.com/api/v3/urls/';
+    private const ENDPOINT_URLS = 'https://www.virustotal.com/api/v3/urls/';
+
+    private const ENDPOINT_ARCHIVOS = 'https://www.virustotal.com/api/v3/files/';
 
     public function estaConfigurado(): bool
     {
@@ -28,12 +32,28 @@ class VirusTotalClient
      */
     public function consultarUrl(string $url): ?VeredictoVirusTotal
     {
+        $url = ExtractorDeUrls::conEsquema($url);
+
+        // VirusTotal identifies URLs by their unpadded base64url encoding.
+        $id = rtrim(strtr(base64_encode($url), '+/', '-_'), '=');
+
+        return $this->consultar('virustotal:url:'.hash('sha256', $url), self::ENDPOINT_URLS.$id);
+    }
+
+    /**
+     * Looks up a file by its SHA-256 hash (64 lowercase hex characters). Null means VirusTotal
+     * is not configured or could not be reached; a hash it does not know is noEncontrado().
+     */
+    public function consultarArchivo(string $sha256): ?VeredictoVirusTotal
+    {
+        return $this->consultar('virustotal:file:'.$sha256, self::ENDPOINT_ARCHIVOS.$sha256);
+    }
+
+    private function consultar(string $claveCache, string $endpoint): ?VeredictoVirusTotal
+    {
         if (! $this->estaConfigurado()) {
             return null;
         }
-
-        $url = ExtractorDeUrls::conEsquema($url);
-        $claveCache = 'virustotal:url:'.hash('sha256', $url);
 
         /** @var array{encontrado: bool, maliciosos: int, sospechosos: int}|null $cacheado */
         $cacheado = Cache::get($claveCache);
@@ -42,7 +62,7 @@ class VirusTotalClient
             return new VeredictoVirusTotal(...$cacheado);
         }
 
-        $veredicto = $this->pedir($url);
+        $veredicto = $this->pedir($endpoint);
 
         if ($veredicto !== null) {
             Cache::put($claveCache, [
@@ -55,17 +75,14 @@ class VirusTotalClient
         return $veredicto;
     }
 
-    private function pedir(string $url): ?VeredictoVirusTotal
+    private function pedir(string $endpoint): ?VeredictoVirusTotal
     {
-        // VirusTotal identifies URLs by their unpadded base64url encoding.
-        $id = rtrim(strtr(base64_encode($url), '+/', '-_'), '=');
-
         try {
             $response = Http::withHeaders(['x-apikey' => (string) config('services.virustotal.key')])
                 ->acceptJson()
                 ->connectTimeout(2)
                 ->timeout((int) config('services.virustotal.timeout'))
-                ->get(self::ENDPOINT.$id);
+                ->get($endpoint);
         } catch (ConnectionException $e) {
             Log::warning('VirusTotal no respondió a tiempo.', ['error' => $e->getMessage()]);
 
@@ -78,6 +95,13 @@ class VirusTotalClient
 
         if ($response->notFound()) {
             return VeredictoVirusTotal::noEncontrado();
+        }
+
+        // Logged apart so a quota problem is easy to spot: the key is shared by links and files.
+        if ($response->tooManyRequests()) {
+            Log::warning('VirusTotal rechazó la consulta por cuota (429).');
+
+            return null;
         }
 
         $estadisticas = $response->json('data.attributes.last_analysis_stats');

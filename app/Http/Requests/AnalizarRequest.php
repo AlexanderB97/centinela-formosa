@@ -47,7 +47,8 @@ class AnalizarRequest extends FormRequest
     public static function reglas(mixed $tipo): array
     {
         return [
-            'tipo' => ['required', Rule::enum(TipoContenido::class)],
+            // Files are scanned by hash from the Livewire analyzer only, never through this API.
+            'tipo' => ['required', Rule::enum(TipoContenido::class)->except([TipoContenido::Archivo])],
             'contenido' => array_filter([
                 'required',
                 'string',

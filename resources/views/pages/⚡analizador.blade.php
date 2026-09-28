@@ -1,9 +1,16 @@
 <?php
 
+use App\Enums\Barrio;
+use App\Enums\Departamento;
+use App\Enums\MedioRecepcion;
+use App\Enums\TipoContenido;
 use App\Http\Requests\ReportarRequest;
 use App\Models\Analisis;
+use App\Services\Analisis\VirusTotalNoDisponible;
+use App\Services\EscanerDeArchivos;
 use App\Services\ReportarAnalisis;
 use App\Services\RiskAnalyzer;
+use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
@@ -22,7 +29,9 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
      * { nivel: 'seguro'|'dudoso'|'riesgo', razones: string[], explicacion: string, explicacion_generada_por_ia: bool, analisis_id: int|null }
      * `analisis_id` es null si backend no pudo guardar el análisis; en ese caso no se puede reportar.
      *
-     * @var array{nivel: string, razones: array<int, string>, explicacion: string, explicacion_generada_por_ia: bool, analisis_id: int|null}|null
+     * Los archivos agregan `sin_coincidencias`: true cuando VirusTotal no conoce la huella.
+     *
+     * @var array{nivel: string, razones: array<int, string>, explicacion: string, explicacion_generada_por_ia: bool, analisis_id: int|null, sin_coincidencias?: bool}|null
      */
     #[Locked]
     public ?array $resultado = null;
@@ -42,41 +51,61 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
     public bool $reporteAbierto = false;
     public string $comentario = '';
 
+    /** Contexto opcional del mensaje (no del visitante): valor de Departamento / MedioRecepcion, o vacío. */
+    public string $departamento = '';
+    public string $medio = '';
+
+    /** Barrio de Formosa Capital: solo se ofrece (y solo vale) si el departamento es formosa_capital. */
+    public string $barrio = '';
+
     /** Mensaje del último reporte y su tipo: 'exito' (201), 'aviso' (422) o 'error' (falla del envío). */
     public ?string $avisoReporte = null;
     public ?string $tipoAviso = null;
 
     public function seleccionarTipo(string $tipo): void
     {
-        if (! in_array($tipo, ['texto', 'link', 'qr'], true)) {
+        if (! in_array($tipo, ['texto', 'link', 'qr', 'archivo'], true)) {
             return;
         }
 
         $this->tipo = $tipo;
-        $this->reset('contenido', 'resultado', 'error', 'reporteAbierto', 'comentario', 'avisoReporte', 'tipoAviso');
+        $this->reset('contenido', 'resultado', 'error', 'reporteAbierto', 'comentario', 'departamento', 'medio', 'barrio', 'avisoReporte', 'tipoAviso');
         $this->resetValidation();
     }
 
     public function analizar(): void
     {
-        $this->reset('resultado', 'error', 'reporteAbierto', 'comentario', 'avisoReporte', 'tipoAviso');
+        $this->reset('resultado', 'error', 'reporteAbierto', 'comentario', 'departamento', 'medio', 'barrio', 'avisoReporte', 'tipoAviso');
 
         // MOCK: reglas que imitan el 422 del contrato. Backend define las definitivas.
         $this->validate([
-            'tipo' => ['required', Rule::in(['texto', 'link', 'qr'])],
-            'contenido' => array_filter(['required', 'string', 'max:5000', $this->tipo === 'link' ? 'url' : null]),
+            'tipo' => ['required', Rule::in(['texto', 'link', 'qr', 'archivo'])],
+            'contenido' => $this->tipo === 'archivo'
+                // Only the SHA-256 computed in the browser arrives here, never the file.
+                ? ['required', 'string', 'regex:/^[a-f0-9]{64}$/']
+                : array_filter(['required', 'string', 'max:5000', $this->tipo === 'link' ? 'url' : null]),
         ], [
             'tipo.required' => 'Elegí qué querés analizar.',
             'tipo.in' => 'El tipo de contenido no es válido.',
             'contenido.required' => match ($this->tipo) {
                 'link' => 'Pegá el link que querés analizar.',
-                'qr' => 'Primero subí una foto con un código QR.',
+                'qr' => 'Primero escaneá el código QR con la cámara o subí una foto.',
+                'archivo' => 'Primero elegí el archivo que querés revisar.',
                 default => 'Pegá el mensaje que querés analizar.',
             },
+            'contenido.regex' => 'No pudimos calcular la huella del archivo. Probá elegirlo de nuevo.',
             'contenido.max' => 'El contenido no puede superar los 5000 caracteres.',
             'contenido.url' => 'Ingresá un link completo, por ejemplo https://ejemplo.com.',
         ]);
 
+        if ($this->tipo === TipoContenido::Archivo->value) {
+            $this->escanearArchivo();
+
+            return;
+        }
+
+        // PENDIENTE (tarea aparte): el análisis de texto/link desde este componente no tiene rate
+        // limit; solo POST /analizar lo tiene (throttle:analizar). El escáner de archivos sí lo tiene.
         try {
             // Misma lógica que POST /analizar; incluye el analisis_id real de la fila guardada.
             $this->resultado = app(RiskAnalyzer::class)->analizar($this->tipo, $this->contenido)->toArray();
@@ -86,6 +115,46 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
         }
     }
 
+    /**
+     * Máximo de escaneos de archivos por minuto y por IP: comparte la cuota de VirusTotal con los links.
+     */
+    private const MAXIMO_ESCANEOS_POR_MINUTO = 4;
+
+    /**
+     * Escanea un archivo por su huella (ya validada): nunca recibe el archivo.
+     */
+    private function escanearArchivo(): void
+    {
+        $clave = 'escaner-archivos:'.request()->ip();
+
+        if (RateLimiter::tooManyAttempts($clave, self::MAXIMO_ESCANEOS_POR_MINUTO)) {
+            $this->addError('contenido', 'Hiciste muchas consultas de archivos seguidas. Esperá un minuto y probá de nuevo.');
+
+            return;
+        }
+
+        RateLimiter::hit($clave, 60);
+
+        try {
+            $resultado = app(EscanerDeArchivos::class)->analizar($this->contenido);
+        } catch (VirusTotalNoDisponible) {
+            // Expected (no key, timeout, quota): the client already logged why. Nothing is stored.
+            $this->error = true;
+
+            return;
+        } catch (Throwable $e) {
+            report($e);
+            $this->error = true;
+
+            return;
+        }
+
+        $this->resultado = [
+            ...$resultado->toArray(),
+            'sin_coincidencias' => $resultado->razones === [EscanerDeArchivos::RAZON_SIN_COINCIDENCIAS],
+        ];
+    }
+
     public function abrirReporte(): void
     {
         if ($this->resultado === null || $this->resultado['analisis_id'] === null) {
@@ -93,14 +162,25 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
         }
 
         $this->reporteAbierto = true;
-        $this->reset('comentario', 'avisoReporte', 'tipoAviso');
-        $this->resetValidation('comentario');
+        $this->reset('comentario', 'departamento', 'medio', 'barrio', 'avisoReporte', 'tipoAviso');
+        $this->resetValidation(['comentario', 'departamento', 'medio', 'barrio']);
+    }
+
+    /**
+     * Si el departamento deja de ser Formosa Capital, el barrio elegido ya no aplica.
+     */
+    public function updatedDepartamento(): void
+    {
+        if ($this->departamento !== Departamento::FormosaCapital->value) {
+            $this->reset('barrio');
+            $this->resetValidation('barrio');
+        }
     }
 
     public function cerrarReporte(): void
     {
-        $this->reset('reporteAbierto', 'comentario', 'avisoReporte', 'tipoAviso');
-        $this->resetValidation('comentario');
+        $this->reset('reporteAbierto', 'comentario', 'departamento', 'medio', 'barrio', 'avisoReporte', 'tipoAviso');
+        $this->resetValidation(['comentario', 'departamento', 'medio', 'barrio']);
     }
 
     public function reportar(): void
@@ -112,19 +192,30 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
         $reglas = ReportarRequest::reglas();
         $mensajes = ReportarRequest::mensajes();
 
-        // Error del comentario: se muestra debajo del campo, como cualquier error de validación.
-        $this->validate(['comentario' => $reglas['comentario']], $mensajes);
+        // Errores del comentario, el departamento o el medio: se muestran debajo de cada campo.
+        $this->validate([
+            'comentario' => $reglas['comentario'],
+            'departamento' => $reglas['departamento'],
+            'medio' => $reglas['medio'],
+            'barrio' => $reglas['barrio'],
+        ], $mensajes);
 
         try {
             // Misma validación y lógica que POST /reportar, sin pasar por HTTP. Sin datos del visitante.
             Validator::make(['analisis_id' => $this->resultado['analisis_id']], ['analisis_id' => $reglas['analisis_id']], $mensajes)->validate();
 
-            app(ReportarAnalisis::class)->registrar($this->resultado['analisis_id'], $this->comentario);
+            app(ReportarAnalisis::class)->registrar(
+                $this->resultado['analisis_id'],
+                $this->comentario,
+                Departamento::tryFrom($this->departamento),
+                MedioRecepcion::tryFrom($this->medio),
+                Barrio::tryFrom($this->barrio),
+            );
         } catch (ValidationException $e) {
             // 422 del contrato (análisis inexistente o ya reportado): aviso calmo, no un error.
             $this->tipoAviso = 'aviso';
             $this->avisoReporte = collect($e->errors())->flatten()->first();
-            $this->reset('reporteAbierto', 'comentario');
+            $this->reset('reporteAbierto', 'comentario', 'departamento', 'medio', 'barrio');
 
             return;
         } catch (Throwable $e) {
@@ -137,7 +228,7 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
 
         $this->tipoAviso = 'exito';
         $this->avisoReporte = ReportarAnalisis::MENSAJE_EXITO;
-        $this->reset('reporteAbierto', 'comentario');
+        $this->reset('reporteAbierto', 'comentario', 'departamento', 'medio', 'barrio');
     }
 
     // DEPRECATED: ya no se usa, ReportarAnalisis real lo reemplaza. Se deja como referencia.
@@ -283,7 +374,7 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
     <div>
         <h1 class="text-2xl font-semibold text-neutral-900 sm:text-3xl">{{ __('Analizador de riesgo') }}</h1>
         <p class="mt-2 text-neutral-600">
-            {{ __('Pegá un mensaje, un link o subí la foto de un código QR y te decimos si parece una estafa.') }}
+            {{ __('Pegá un mensaje, un link o escaneá un código QR y te decimos si parece una estafa.') }}
         </p>
     </div>
 
@@ -295,6 +386,7 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
             'qr' => '<rect x="4" y="4" width="6" height="6" rx="1" /><rect x="14" y="4" width="6" height="6" rx="1" /><rect x="4" y="14" width="6" height="6" rx="1" /><path d="M14 14h2v2M20 14v2M14 20h6M18 18v2" />',
             'documento' => '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5Z" /><path d="M14 3v5h5M9 13h6M9 17h4" />',
             'camara' => '<path d="M4 8h3l2-3h6l2 3h3v11H4V8Z" /><circle cx="12" cy="13" r="3.5" />',
+            'archivo' => '<path d="m20 11.5-8.2 8.2a5.3 5.3 0 0 1-7.5-7.5l8.2-8.2a3.5 3.5 0 0 1 5 5l-8.2 8.2a1.8 1.8 0 0 1-2.5-2.5l7.5-7.5" />',
         ];
 
         // Ejemplos inventados a partir de patrones reales de estafa; se cargan en el campo, no se analizan solos.
@@ -335,7 +427,7 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
             x-on:keydown.arrow-left.prevent="mover(-1)"
             class="flex border-b border-neutral-200 px-2 sm:px-4"
         >
-            @foreach (['texto' => __('Texto'), 'link' => __('Link'), 'qr' => __('Foto de QR')] as $valor => $etiqueta)
+            @foreach (['texto' => __('Texto'), 'link' => __('Link'), 'qr' => __('QR'), 'archivo' => __('Archivo')] as $valor => $etiqueta)
                 <button
                     type="button"
                     role="tab"
@@ -344,7 +436,8 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
                     aria-selected="{{ $tipo === $valor ? 'true' : 'false' }}"
                     tabindex="{{ $tipo === $valor ? '0' : '-1' }}"
                     wire:click="seleccionarTipo('{{ $valor }}')"
-                    x-on:click="errorCliente = false"
+                    {{-- El aviso apaga la cámara del QR enseguida, sin esperar la respuesta del servidor. --}}
+                    x-on:click="errorCliente = false; $dispatch('analizador-cambio-tab')"
                     wire:loading.attr="disabled"
                     wire:target="analizar"
                     @class([
@@ -354,7 +447,7 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
                     ])
                 >
                     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false" @class([
-                        'size-5 shrink-0',
+                        'hidden size-5 shrink-0 sm:block',
                         'text-[#16a34a]' => $tipo === $valor,
                         'text-neutral-400 group-hover:text-neutral-600' => $tipo !== $valor,
                     ])>{!! $iconos[$valor] !!}</svg>
@@ -416,12 +509,32 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
                             class="{{ $claseCampo }}"
                         />
                     </div>
-                @else
-                    {{-- La imagen se decodifica en el navegador con jsQR: no tiene wire:model, así que nunca se sube. --}}
+                @elseif ($tipo === 'qr')
+                    {{--
+                        Dos formas de leer el QR, las dos 100% en el navegador con jsQR (resources/js/qr.js):
+                        subir una foto (el input no tiene wire:model, así que nunca se sube) o la cámara en vivo
+                        (ningún cuadro del video sale del dispositivo). Al servidor solo llega el texto leído.
+                        La cámara es una excepción deliberada a "no pedir permisos del dispositivo": se pide solo
+                        cuando la persona toca "Usar cámara", y subir una foto sigue siendo la opción por defecto.
+                    --}}
                     <div
                         x-data="{
+                            modo: 'imagen',
                             estado: '',
+                            camara: '',
                             arrastrando: false,
+                            escaner: null,
+
+                            // Único lugar que decide qué pasa con un QR ya leído, venga de una foto o de la cámara.
+                            usarTextoQr(texto, { analizarYa = false } = {}) {
+                                this.$wire.contenido = texto;
+
+                                if (analizarYa) {
+                                    this.errorCliente = false;
+                                    this.$wire.analizar();
+                                }
+                            },
+
                             async leer(archivo) {
                                 this.$wire.contenido = '';
 
@@ -435,16 +548,238 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
                                 try {
                                     const texto = await window.leerQrDeArchivo(archivo);
                                     this.estado = texto ? 'ok' : 'sin-qr';
-                                    if (texto) this.$wire.contenido = texto;
+                                    if (texto) this.usarTextoQr(texto);
                                 } catch (e) {
                                     this.estado = 'invalido';
+                                }
+                            },
+
+                            elegirModo(modo) {
+                                if (modo === this.modo) return;
+
+                                this.detenerCamara();
+                                this.modo = modo;
+                                this.estado = '';
+                                this.camara = '';
+                                this.$wire.contenido = '';
+
+                                // Tocar 'Usar cámara' es el pedido explícito: recién ahí se pide el permiso.
+                                if (modo === 'camara') this.abrirCamara();
+                            },
+
+                            abrirCamara() {
+                                this.detenerCamara();
+                                this.$wire.contenido = '';
+                                this.camara = 'abriendo';
+
+                                const iniciar = () => {
+                                    if (this.modo !== 'camara' || this.camara !== 'abriendo') return;
+
+                                    this.escaner = window.escanearQrConCamara(this.$refs.video, {
+                                        alIniciar: () => { this.camara = 'buscando' },
+                                        alDetectar: (texto) => {
+                                            this.escaner = null;
+                                            this.camara = 'leido';
+                                            this.usarTextoQr(texto, { analizarYa: true });
+                                        },
+                                        alError: (e) => {
+                                            this.escaner = null;
+                                            this.camara = e.codigo;
+                                        },
+                                        alAgotarTiempo: () => {
+                                            this.escaner = null;
+                                            this.camara = 'agotada';
+                                        },
+                                    });
+                                };
+
+                                window.escanearQrConCamara ? iniciar() : window.addEventListener('qr:listo', iniciar, { once: true });
+                            },
+
+                            detenerCamara() {
+                                this.escaner?.detener();
+                                this.escaner = null;
+                            },
+
+                            // Pestaña del navegador oculta, app minimizada o página que se va: la cámara no queda prendida.
+                            pausar() {
+                                if (this.camara === 'abriendo' || this.camara === 'buscando') {
+                                    this.detenerCamara();
+                                    this.camara = 'pausada';
+                                }
+                            },
+
+                            // Salir de la página (también con wire:navigate) o cambiar de pestaña del analizador.
+                            destroy() {
+                                this.detenerCamara();
+                            },
+                        }"
+                        x-on:analizador-cambio-tab.window="detenerCamara(); if (camara === 'abriendo' || camara === 'buscando') camara = ''"
+                        x-on:visibilitychange.document="document.hidden && pausar()"
+                        x-on:pagehide.window="pausar()"
+                        class="flex flex-col gap-3"
+                    >
+                        @php
+                            $claseModo = 'rounded-md px-3 py-2 text-sm font-medium transition focus:outline-none focus-visible:ring-2 focus-visible:ring-[#16a34a]';
+                            $claseModoActivo = 'bg-white text-[#12151a] shadow-sm';
+                            $claseModoInactivo = 'text-neutral-600 hover:text-neutral-900';
+                        @endphp
+                        <div role="group" aria-label="{{ __('Cómo querés leer el código QR') }}" class="grid grid-cols-2 gap-1 rounded-lg bg-neutral-100 p-1" data-test="modos-qr">
+                            <button
+                                type="button"
+                                x-on:click="elegirModo('imagen')"
+                                aria-pressed="true"
+                                :aria-pressed="(modo === 'imagen').toString()"
+                                class="{{ $claseModo }}"
+                                :class="modo === 'imagen' ? @js($claseModoActivo) : @js($claseModoInactivo)"
+                                data-test="modo-imagen"
+                            >
+                                {{ __('Subir imagen') }}
+                            </button>
+                            <button
+                                type="button"
+                                x-on:click="elegirModo('camara')"
+                                aria-pressed="false"
+                                :aria-pressed="(modo === 'camara').toString()"
+                                class="{{ $claseModo }}"
+                                :class="modo === 'camara' ? @js($claseModoActivo) : @js($claseModoInactivo)"
+                                data-test="modo-camara"
+                            >
+                                {{ __('Usar cámara') }}
+                            </button>
+                        </div>
+
+                        <div x-show="modo === 'imagen'" class="flex flex-col gap-2" data-test="qr-subida">
+                            <label
+                                for="archivo-qr"
+                                x-on:dragover.prevent="arrastrando = true"
+                                x-on:dragleave.prevent="arrastrando = false"
+                                x-on:drop.prevent="arrastrando = false; leer($event.dataTransfer.files[0])"
+                                :class="arrastrando && 'border-[#16a34a] bg-[#16a34a]/5'"
+                                class="{{ $zona }} cursor-pointer hover:border-[#16a34a] focus-within:ring-2 focus-within:ring-[#16a34a]/40"
+                            >
+                                <span class="{{ $iconoZona }}" aria-hidden="true">
+                                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" class="size-7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" focusable="false">{!! $iconos['camara'] !!}</svg>
+                                </span>
+                                <span id="qr-titulo" class="{{ $tituloZona }}">{{ __('Subí la foto del código QR') }}</span>
+                                <span class="{{ $ayudaZona }}">{{ __('Arrastrala acá o tocá para elegirla. En el celular también podés sacarla con la cámara.') }}</span>
+                                <span class="mt-2 inline-flex rounded-md bg-[#12151a] px-4 py-2 text-sm font-medium text-white" aria-hidden="true">{{ __('Elegir foto') }}</span>
+                                <input
+                                    id="archivo-qr"
+                                    type="file"
+                                    accept="image/*"
+                                    x-on:change="leer($event.target.files[0])"
+                                    aria-labelledby="qr-titulo"
+                                    aria-describedby="qr-ayuda qr-estado"
+                                    @error('contenido') aria-invalid="true" @enderror
+                                    class="sr-only"
+                                />
+                            </label>
+                            <p id="qr-ayuda" class="text-xs text-neutral-500">
+                                {{ __('La imagen se procesa en tu dispositivo: no se sube a ningún servidor.') }}
+                            </p>
+
+                            <div id="qr-estado" aria-live="polite" class="text-sm">
+                                <p x-show="estado === 'leyendo'" x-cloak class="text-neutral-600">{{ __('Leyendo el código…') }}</p>
+                                <p x-show="estado === 'sin-qr'" x-cloak class="text-red-700">{{ __('No encontramos un código QR en la imagen. Probá con una foto más nítida y de frente.') }}</p>
+                                <p x-show="estado === 'invalido'" x-cloak class="text-red-700">{{ __('No pudimos leer la imagen. Probá con otra foto.') }}</p>
+                            </div>
+                        </div>
+
+                        @php
+                            $botonPrincipal = 'rounded-md bg-[#12151a] px-4 py-2 text-sm font-medium text-white hover:bg-black focus:outline-none focus-visible:ring-2 focus-visible:ring-[#16a34a] focus-visible:ring-offset-2';
+                            $botonSecundario = 'rounded-md border border-neutral-300 bg-white px-4 py-2 text-sm font-medium text-neutral-800 hover:border-[#16a34a] hover:text-[#15803d] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#16a34a] focus-visible:ring-offset-2';
+                        @endphp
+                        {{-- Cámara en vivo. wire:ignore: los renders de Livewire (por ejemplo al volver el resultado) no tocan el video. --}}
+                        <div x-show="modo === 'camara'" x-cloak wire:ignore class="flex flex-col gap-3" data-test="qr-camara">
+                            <div x-show="camara === 'abriendo' || camara === 'buscando'" class="relative mx-auto aspect-square w-full max-w-sm overflow-hidden rounded-xl bg-[#12151a]">
+                                {{-- playsinline + muted: sin esto el iPhone no reproduce el video dentro de la página. --}}
+                                <video x-ref="video" playsinline muted autoplay aria-label="{{ __('Vista de la cámara') }}" class="size-full object-cover"></video>
+                                {{-- Guía para encuadrar el código. --}}
+                                <div class="pointer-events-none absolute inset-[18%]" aria-hidden="true">
+                                    <span class="absolute left-0 top-0 size-8 rounded-tl-lg border-l-4 border-t-4 border-[#22c55e]"></span>
+                                    <span class="absolute right-0 top-0 size-8 rounded-tr-lg border-r-4 border-t-4 border-[#22c55e]"></span>
+                                    <span class="absolute bottom-0 left-0 size-8 rounded-bl-lg border-b-4 border-l-4 border-[#22c55e]"></span>
+                                    <span class="absolute bottom-0 right-0 size-8 rounded-br-lg border-b-4 border-r-4 border-[#22c55e]"></span>
+                                </div>
+                                <p x-show="camara === 'abriendo'" class="absolute inset-x-0 top-1/2 -translate-y-1/2 px-6 text-center text-sm text-white">{{ __('Abriendo la cámara…') }}</p>
+                            </div>
+
+                            <div id="qr-camara-estado" aria-live="polite" class="text-center text-sm">
+                                <p x-show="camara === 'abriendo'" class="text-neutral-600">{{ __('Si el navegador te pregunta, permití el acceso a la cámara. El video no sale de tu dispositivo.') }}</p>
+                                <p x-show="camara === 'buscando'" class="inline-flex items-center gap-2 text-neutral-700">
+                                    <span class="size-2 shrink-0 animate-pulse rounded-full bg-[#16a34a]" aria-hidden="true"></span>
+                                    {{ __('Buscando un código QR… Apuntá al código y mantené el celular quieto.') }}
+                                </p>
+                                <p x-show="camara === 'leido'" class="text-[#15803d]">{{ __('Leímos el código y apagamos la cámara.') }}</p>
+                                <p x-show="camara === 'pausada'" class="text-neutral-600">{{ __('Apagamos la cámara porque saliste de la página. Tocá "Reanudar" para seguir.') }}</p>
+                                <p x-show="camara === 'agotada'" class="text-neutral-600">{{ __('No encontramos un código QR en un minuto y apagamos la cámara. Probá de nuevo con más luz o subí una foto.') }}</p>
+                                <p x-show="camara === 'inseguro'" class="text-red-700">{{ __('La cámara solo funciona si el sitio se abre con https. Podés subir una foto del QR.') }}</p>
+                                <p x-show="camara === 'sin-soporte'" class="text-red-700">{{ __('Tu navegador no permite usar la cámara acá. Podés subir una foto del QR.') }}</p>
+                                <p x-show="camara === 'permiso'" class="text-red-700">{{ __('No diste permiso para usar la cámara. Podés habilitarlo en la configuración del navegador o subir una foto.') }}</p>
+                                <p x-show="camara === 'sin-camara'" class="text-red-700">{{ __('No encontramos una cámara en este dispositivo. Podés subir una foto del QR.') }}</p>
+                                <p x-show="camara === 'ocupada'" class="text-red-700">{{ __('Otra app está usando la cámara. Cerrala y probá de nuevo.') }}</p>
+                                <p x-show="camara === 'error'" class="text-red-700">{{ __('No pudimos abrir la cámara. Probá de nuevo o subí una foto.') }}</p>
+                            </div>
+
+                            <div class="flex flex-wrap justify-center gap-2">
+                                <button x-show="camara === 'abriendo' || camara === 'buscando'" type="button" x-on:click="detenerCamara(); camara = ''" class="{{ $botonSecundario }}" data-test="detener-camara">
+                                    {{ __('Detener cámara') }}
+                                </button>
+                                <button x-show="camara === ''" type="button" x-on:click="abrirCamara()" class="{{ $botonPrincipal }}">
+                                    {{ __('Abrir cámara') }}
+                                </button>
+                                <button x-show="camara === 'leido'" type="button" x-on:click="abrirCamara()" class="{{ $botonPrincipal }}" data-test="escanear-otro">
+                                    {{ __('Escanear otro') }}
+                                </button>
+                                <button x-show="camara === 'pausada'" type="button" x-on:click="abrirCamara()" class="{{ $botonPrincipal }}">
+                                    {{ __('Reanudar') }}
+                                </button>
+                                <button x-show="['agotada', 'permiso', 'ocupada', 'error'].includes(camara)" type="button" x-on:click="abrirCamara()" class="{{ $botonPrincipal }}">
+                                    {{ __('Probar de nuevo') }}
+                                </button>
+                                <button x-show="['agotada', 'inseguro', 'sin-soporte', 'permiso', 'sin-camara', 'ocupada', 'error'].includes(camara)" type="button" x-on:click="elegirModo('imagen')" class="{{ $botonSecundario }}">
+                                    {{ __('Subir una foto') }}
+                                </button>
+                            </div>
+                        </div>
+
+                        <div x-show="$wire.contenido" x-cloak class="rounded-md border border-neutral-200 bg-neutral-50 p-3">
+                            <p class="text-xs font-medium text-neutral-600">{{ __('Contenido leído del QR') }}</p>
+                            <p class="mt-1 break-all font-mono text-sm text-neutral-900" x-text="$wire.contenido"></p>
+                        </div>
+                    </div>
+                @else
+                    {{-- Escáner por huella: el navegador calcula el SHA-256 y solo se manda ese texto. El input no tiene wire:model: el archivo nunca se sube. --}}
+                    <div
+                        x-data="{
+                            estado: '',
+                            nombre: '',
+                            arrastrando: false,
+                            async leer(archivo) {
+                                this.$wire.contenido = '';
+                                this.nombre = '';
+
+                                if (! archivo) {
+                                    this.estado = '';
+                                    return;
+                                }
+
+                                this.estado = 'calculando';
+
+                                try {
+                                    this.$wire.contenido = await window.calcularHuellaDeArchivo(archivo);
+                                    this.nombre = archivo.name;
+                                    this.estado = 'ok';
+                                } catch (e) {
+                                    this.estado = e.codigo ?? 'error';
                                 }
                             },
                         }"
                         class="flex flex-col gap-2"
                     >
                         <label
-                            for="archivo-qr"
+                            for="archivo-escaner"
                             x-on:dragover.prevent="arrastrando = true"
                             x-on:dragleave.prevent="arrastrando = false"
                             x-on:drop.prevent="arrastrando = false; leer($event.dataTransfer.files[0])"
@@ -452,34 +787,40 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
                             class="{{ $zona }} cursor-pointer hover:border-[#16a34a] focus-within:ring-2 focus-within:ring-[#16a34a]/40"
                         >
                             <span class="{{ $iconoZona }}" aria-hidden="true">
-                                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" class="size-7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" focusable="false">{!! $iconos['camara'] !!}</svg>
+                                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" class="size-7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" focusable="false">{!! $iconos['documento'] !!}</svg>
                             </span>
-                            <span id="qr-titulo" class="{{ $tituloZona }}">{{ __('Subí la foto del código QR') }}</span>
-                            <span class="{{ $ayudaZona }}">{{ __('Arrastrala acá o tocá para elegirla. En el celular también podés sacarla con la cámara.') }}</span>
-                            <span class="mt-2 inline-flex rounded-md bg-[#12151a] px-4 py-2 text-sm font-medium text-white" aria-hidden="true">{{ __('Elegir foto') }}</span>
+                            <span id="archivo-titulo" class="{{ $tituloZona }}">{{ __('Elegí el archivo que te mandaron') }}</span>
+                            <span class="{{ $ayudaZona }}">{{ __('PDF, Word, Excel o imagen (JPG, PNG) de hasta 10 MB. Arrastralo acá o tocá para elegirlo.') }}</span>
+                            <span class="mt-2 inline-flex rounded-md bg-[#12151a] px-4 py-2 text-sm font-medium text-white" aria-hidden="true">{{ __('Elegir archivo') }}</span>
                             <input
-                                id="archivo-qr"
+                                id="archivo-escaner"
                                 type="file"
-                                accept="image/*"
+                                accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png"
                                 x-on:change="leer($event.target.files[0])"
-                                aria-labelledby="qr-titulo"
-                                aria-describedby="qr-ayuda qr-estado"
+                                aria-labelledby="archivo-titulo"
+                                aria-describedby="archivo-ayuda archivo-estado"
                                 @error('contenido') aria-invalid="true" @enderror
                                 class="sr-only"
                             />
                         </label>
-                        <p id="qr-ayuda" class="text-xs text-neutral-500">
-                            {{ __('La imagen se procesa en tu dispositivo: no se sube a ningún servidor.') }}
+                        <p id="archivo-ayuda" class="text-xs text-neutral-500">
+                            {{ __('El archivo no se sube a ningún lado: calculamos su huella (SHA-256) en tu dispositivo y consultamos solo esa huella en VirusTotal.') }}
                         </p>
 
-                        <div id="qr-estado" aria-live="polite" class="text-sm">
-                            <p x-show="estado === 'leyendo'" x-cloak class="text-neutral-600">{{ __('Leyendo el código…') }}</p>
-                            <p x-show="estado === 'sin-qr'" x-cloak class="text-red-700">{{ __('No encontramos un código QR en la imagen. Probá con una foto más nítida y de frente.') }}</p>
-                            <p x-show="estado === 'invalido'" x-cloak class="text-red-700">{{ __('No pudimos leer la imagen. Probá con otra foto.') }}</p>
+                        <div id="archivo-estado" aria-live="polite" class="text-sm">
+                            <p x-show="estado === 'calculando'" x-cloak class="text-neutral-600">{{ __('Calculando la huella del archivo…') }}</p>
+                            <p x-show="estado === 'tipo'" x-cloak class="text-red-700">{{ __('Ese tipo de archivo no está admitido. Probá con PDF, Word, Excel, JPG o PNG.') }}</p>
+                            <p x-show="estado === 'tamano'" x-cloak class="text-red-700">{{ __('El archivo supera los 10 MB.') }}</p>
+                            <p x-show="estado === 'vacio'" x-cloak class="text-red-700">{{ __('El archivo está vacío.') }}</p>
+                            <p x-show="estado === 'contenido'" x-cloak class="text-red-700">{{ __('El contenido del archivo no corresponde a su extensión. Tené cuidado: a veces se cambia la extensión para disfrazar un archivo peligroso.') }}</p>
+                            <p x-show="estado === 'sin-soporte'" x-cloak class="text-red-700">{{ __('Tu navegador no permite calcular la huella en esta página. Probá con un navegador actualizado.') }}</p>
+                            <p x-show="estado === 'error'" x-cloak class="text-red-700">{{ __('No pudimos leer el archivo. Probá de nuevo.') }}</p>
                         </div>
 
                         <div x-show="$wire.contenido" x-cloak class="rounded-md border border-neutral-200 bg-neutral-50 p-3">
-                            <p class="text-xs font-medium text-neutral-600">{{ __('Contenido leído del QR') }}</p>
+                            <p class="text-xs font-medium text-neutral-600">
+                                {{ __('Huella calculada en tu dispositivo') }}<span x-show="nombre" x-text="' · ' + nombre"></span>
+                            </p>
                             <p class="mt-1 break-all font-mono text-sm text-neutral-900" x-text="$wire.contenido"></p>
                         </div>
                     </div>
@@ -492,7 +833,7 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
                 @endif
 
                 <div class="flex flex-col-reverse gap-3 sm:flex-row sm:items-center sm:justify-end">
-                    @if ($tipo !== 'qr')
+                    @if (in_array($tipo, ['texto', 'link'], true))
                         <button
                             type="button"
                             x-on:click="ejemplosAbiertos = ! ejemplosAbiertos"
@@ -524,7 +865,7 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
                     </button>
                 </div>
 
-                @if ($tipo !== 'qr')
+                @if (in_array($tipo, ['texto', 'link'], true))
                     <div id="ejemplos" x-show="ejemplosAbiertos" x-cloak class="rounded-lg border border-neutral-200 bg-neutral-50 p-4">
                         <p class="text-sm font-semibold text-neutral-900">{{ __('Ejemplos de estafas comunes') }}</p>
                         <p class="mt-1 text-xs text-neutral-500">{{ __('Son ejemplos inventados a partir de patrones reales. Elegí uno para cargarlo y después tocá Analizar.') }}</p>
@@ -612,6 +953,11 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
                         ];
                         $nivel = $resultado['nivel'];
                         $estilo = $semaforo[$nivel];
+
+                        // Archivo que VirusTotal no conoce: se guarda como dudoso, pero se nombra por lo que es.
+                        if ($resultado['sin_coincidencias'] ?? false) {
+                            $estilo = [...$estilo, 'etiqueta' => __('Sin coincidencias conocidas'), 'resumen' => __('VirusTotal no tiene registros de este archivo.')];
+                        }
                     @endphp
 
                     <article data-nivel="{{ $nivel }}" aria-labelledby="resultado-titulo" class="rounded-xl border-l-8 bg-white p-6 shadow-sm {{ $estilo['borde'] }}">
@@ -718,6 +1064,79 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
                                     </p>
 
                                     <form wire:submit="reportar" x-on:submit="errorRed = false" class="mt-3 flex flex-col gap-3">
+                                        @php
+                                            $claseSelect = 'w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-neutral-900 focus:border-[#16a34a] focus:outline-none focus:ring-2 focus:ring-[#16a34a]/40';
+                                        @endphp
+
+                                        {{-- Contexto opcional del mensaje (dónde y por dónde llegó). No identifica al visitante. --}}
+                                        <div class="grid gap-3 sm:grid-cols-2">
+                                            <div class="flex flex-col gap-2">
+                                                <label for="departamento-reporte" class="text-sm font-medium text-neutral-800">{{ __('Departamento (opcional)') }}</label>
+                                                <select
+                                                    id="departamento-reporte"
+                                                    wire:model.live="departamento"
+                                                    aria-describedby="contexto-ayuda @error('departamento') departamento-error @enderror"
+                                                    @error('departamento') aria-invalid="true" @enderror
+                                                    class="{{ $claseSelect }}"
+                                                >
+                                                    <option value="">{{ __('Prefiero no decir') }}</option>
+                                                    @foreach (\App\Enums\Departamento::cases() as $opcion)
+                                                        <option value="{{ $opcion->value }}">{{ $opcion->etiqueta() }}</option>
+                                                    @endforeach
+                                                </select>
+                                                @error('departamento')
+                                                    <p id="departamento-error" class="text-sm text-red-700">{{ $message }}</p>
+                                                @enderror
+                                            </div>
+
+                                            <div class="flex flex-col gap-2">
+                                                <label for="medio-reporte" class="text-sm font-medium text-neutral-800">{{ __('¿Cómo te llegó? (opcional)') }}</label>
+                                                <select
+                                                    id="medio-reporte"
+                                                    wire:model="medio"
+                                                    aria-describedby="contexto-ayuda @error('medio') medio-error @enderror"
+                                                    @error('medio') aria-invalid="true" @enderror
+                                                    class="{{ $claseSelect }}"
+                                                >
+                                                    <option value="">{{ __('Prefiero no decir') }}</option>
+                                                    @foreach (\App\Enums\MedioRecepcion::cases() as $opcion)
+                                                        <option value="{{ $opcion->value }}">{{ $opcion->etiqueta() }}</option>
+                                                    @endforeach
+                                                </select>
+                                                @error('medio')
+                                                    <p id="medio-error" class="text-sm text-red-700">{{ $message }}</p>
+                                                @enderror
+                                            </div>
+                                        </div>
+                                        {{-- El barrio solo aplica a Formosa Capital: lo decide el servidor con el departamento elegido. --}}
+                                        @if ($departamento === \App\Enums\Departamento::FormosaCapital->value)
+                                            <div class="flex flex-col gap-2" wire:key="campo-barrio" data-test="campo-barrio">
+                                                <label for="barrio-reporte" class="text-sm font-medium text-neutral-800">{{ __('Barrio (si es en la capital)') }}</label>
+                                                <select
+                                                    id="barrio-reporte"
+                                                    wire:model="barrio"
+                                                    aria-describedby="contexto-ayuda @error('barrio') barrio-error @enderror"
+                                                    @error('barrio') aria-invalid="true" @enderror
+                                                    class="{{ $claseSelect }}"
+                                                >
+                                                    <option value="">{{ __('Prefiero no decir') }}</option>
+                                                    @foreach (\App\Enums\Barrio::porZona() as $zona => $barrios)
+                                                        <optgroup label="{{ $zona }}">
+                                                            @foreach ($barrios as $opcion)
+                                                                <option value="{{ $opcion->value }}">{{ $opcion->etiqueta() }}</option>
+                                                            @endforeach
+                                                        </optgroup>
+                                                    @endforeach
+                                                </select>
+                                                @error('barrio')
+                                                    <p id="barrio-error" class="text-sm text-red-700">{{ $message }}</p>
+                                                @enderror
+                                            </div>
+                                        @endif
+                                        <p id="contexto-ayuda" class="-mt-1 text-xs text-neutral-500">
+                                            {{ __('Son opcionales y no te identifican: nos ayudan a saber dónde y por dónde circulan las estafas.') }}
+                                        </p>
+
                                         <div class="flex flex-col gap-2">
                                             <label for="comentario-reporte" class="text-sm font-medium text-neutral-800">{{ __('Comentario (opcional)') }}</label>
                                             <textarea
@@ -779,10 +1198,15 @@ new #[Layout('layouts::publico')] #[Title('Analizador de riesgo')] class extends
             </div>
         </div>
     </div>
+
+    {{-- Componente hijo aparte: no se vuelve a consultar cada vez que el analizador se renderiza.
+         La clave fija hace que Livewire lo reconozca en cada render (una autogenerada puede cambiar y volver a montarlo). --}}
+    <livewire:ultimas-noticias key="ultimas-noticias" />
 </div>
 
 @assets
     @vite('resources/js/qr.js')
+    @vite('resources/js/archivo.js')
 @endassets
 
 @script

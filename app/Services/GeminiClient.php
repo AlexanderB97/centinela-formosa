@@ -44,7 +44,7 @@ class GeminiClient
                     'generationConfig' => [
                         'temperature' => 0.3,
                         'maxOutputTokens' => 300,
-                        
+
                     ],
                 ]);
         } catch (ConnectionException $e) {

@@ -15,11 +15,15 @@ test('analizador page can be rendered without authentication', function () {
         ->assertSee('role="tablist"', false);
 });
 
-test('analizador shows the three tabs', function () {
+test('analizador shows the tabs', function () {
     Livewire::test('pages::analizador')
+        ->assertSeeHtml('id="tab-texto"')
+        ->assertSeeHtml('id="tab-link"')
+        ->assertSeeHtml('id="tab-qr"')
         ->assertSee('Texto')
         ->assertSee('Link')
-        ->assertSee('Foto de QR');
+        ->assertSee('QR')
+        ->assertDontSee('Foto de QR');
 });
 
 test('the qr file input is never bound to livewire', function () {
@@ -105,12 +109,12 @@ test('link tab requires a valid url', function () {
         ->assertHasErrors(['contenido' => 'url']);
 });
 
-test('qr tab asks for a photo when nothing was decoded', function () {
+test('qr tab asks to scan or upload a photo when nothing was decoded', function () {
     Livewire::test('pages::analizador')
         ->call('seleccionarTipo', 'qr')
         ->call('analizar')
         ->assertHasErrors(['contenido' => 'required'])
-        ->assertSee('Primero subí una foto con un código QR.');
+        ->assertSee('Primero escaneá el código QR con la cámara o subí una foto.');
 });
 
 test('analysis failure shows an error with a retry option', function () {

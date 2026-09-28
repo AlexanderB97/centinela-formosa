@@ -47,6 +47,10 @@ class RiskAnalyzer
         $tipo = $tipo instanceof TipoContenido ? $tipo : TipoContenido::tryFrom($tipo)
             ?? throw new InvalidArgumentException("Tipo de contenido inválido: {$tipo}");
 
+        if ($tipo === TipoContenido::Archivo) {
+            throw new InvalidArgumentException('Los archivos se analizan con EscanerDeArchivos, por su huella.');
+        }
+
         $contenido = trim($contenido);
 
         if ($contenido === '') {

@@ -13,22 +13,65 @@
                         <path fill="currentColor" d="M12 1.5 3 5.25v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12v-6L12 1.5Zm0 2.18 7 2.92v4.65c0 4.43-2.98 8.6-7 9.78-4.02-1.18-7-5.35-7-9.78V6.6l7-2.92Z" />
                         <path fill="currentColor" d="M12 6.5a3.5 3.5 0 0 0-1.5 6.66V17h3v-3.84A3.5 3.5 0 0 0 12 6.5Z" />
                     </svg>
-                    <span class="font-semibold text-white">Centinela Formosa</span>
+                    {{-- En pantallas chicas solo se ve el escudo; el nombre queda para lectores de pantalla. --}}
+                    <span class="sr-only font-semibold text-white sm:not-sr-only">Centinela Formosa</span>
                 </a>
 
-                <ul class="ml-auto flex items-center gap-1">
+                <ul class="ml-auto flex items-center gap-0.5 sm:gap-1">
                     <li>
                         <a
                             href="{{ route('impacto') }}"
                             @if (request()->routeIs('impacto')) aria-current="page" @endif
                             @class([
-                                'rounded-md px-3 py-2 text-sm font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-[#22c55e]',
+                                'rounded-md px-1.5 py-2 text-sm font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-[#22c55e] sm:px-3',
                                 'bg-white/10 text-white' => request()->routeIs('impacto'),
                                 'text-neutral-300 hover:bg-white/5 hover:text-white' => ! request()->routeIs('impacto'),
                             ])
                             wire:navigate
                         >
                             {{ __('Impacto') }}
+                        </a>
+                    </li>
+                    <li>
+                        <a
+                            href="{{ route('rankings') }}"
+                            @if (request()->routeIs('rankings')) aria-current="page" @endif
+                            @class([
+                                'rounded-md px-1.5 py-2 text-sm font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-[#22c55e] sm:px-3',
+                                'bg-white/10 text-white' => request()->routeIs('rankings'),
+                                'text-neutral-300 hover:bg-white/5 hover:text-white' => ! request()->routeIs('rankings'),
+                            ])
+                            wire:navigate
+                        >
+                            {{ __('Rankings') }}
+                        </a>
+                    </li>
+                    <li>
+                        <a
+                            href="{{ route('mapa') }}"
+                            @if (request()->routeIs('mapa')) aria-current="page" @endif
+                            @class([
+                                'rounded-md px-1.5 py-2 text-sm font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-[#22c55e] sm:px-3',
+                                'bg-white/10 text-white' => request()->routeIs('mapa'),
+                                'text-neutral-300 hover:bg-white/5 hover:text-white' => ! request()->routeIs('mapa'),
+                            ])
+                            wire:navigate
+                        >
+                            {{ __('Mapa') }}
+                        </a>
+                    </li>
+                    <li>
+                        <a
+                            href="{{ route('noticias') }}"
+                            @if (request()->routeIs('noticias*')) aria-current="page" @endif
+                            @class([
+                                'rounded-md px-1.5 py-2 text-sm font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-[#22c55e] sm:px-3',
+                                'bg-white/10 text-white' => request()->routeIs('noticias*'),
+                                'text-neutral-300 hover:bg-white/5 hover:text-white' => ! request()->routeIs('noticias*'),
+                            ])
+                            wire:navigate
+                        >
+                            {{ __('Noticias') }}
                         </a>
                     </li>
                 </ul>

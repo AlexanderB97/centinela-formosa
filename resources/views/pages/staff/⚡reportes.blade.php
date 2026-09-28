@@ -103,6 +103,9 @@ new #[Layout('layouts::staff')] #[Title('Reportes')] class extends Component {
             ->map(fn (Reporte $reporte) => [
                 'id' => $reporte->id,
                 'comentario' => $reporte->comentario,
+                'departamento' => $reporte->departamento?->etiqueta(),
+                'barrio' => $reporte->barrio?->etiqueta(),
+                'medio' => $reporte->medio?->etiqueta(),
                 'estado' => $reporte->estado->value,
                 'analisis' => [
                     'tipo' => $reporte->analisis->tipo->value,
@@ -226,7 +229,7 @@ new #[Layout('layouts::staff')] #[Title('Reportes')] class extends Component {
     @forelse ($this->pendientes as $reporte)
         @php
             $analisis = $reporte['analisis'];
-            $tipos = ['texto' => __('Texto'), 'link' => __('Link'), 'qr' => __('Foto de QR')];
+            $tipos = ['texto' => __('Texto'), 'link' => __('Link'), 'qr' => __('Foto de QR'), 'archivo' => __('Archivo')];
             $niveles = [
                 'riesgo' => ['etiqueta' => __('Riesgo'), 'clase' => 'bg-red-100 text-red-800'],
                 'dudoso' => ['etiqueta' => __('Dudoso'), 'clase' => 'bg-yellow-100 text-yellow-900'],
@@ -259,7 +262,9 @@ new #[Layout('layouts::staff')] #[Title('Reportes')] class extends Component {
             <div class="mt-2 rounded-md border border-neutral-200 bg-neutral-50 p-3">
                 <p class="whitespace-pre-wrap break-words font-mono text-sm text-neutral-900">{{ $analisis['contenido'] }}</p>
             </div>
-            @if ($analisis['tipo'] !== 'texto')
+            @if ($analisis['tipo'] === 'archivo')
+                <p class="mt-1 text-xs text-neutral-500">{{ __('Huella SHA-256 del archivo. El archivo nunca se subió ni se guardó: solo se calculó su huella en el dispositivo de quien lo analizó.') }}</p>
+            @elseif ($analisis['tipo'] !== 'texto')
                 <p class="mt-1 text-xs text-neutral-500">{{ __('El enlace se muestra como texto y no es clickeable, por seguridad.') }}</p>
             @endif
 
@@ -279,6 +284,27 @@ new #[Layout('layouts::staff')] #[Title('Reportes')] class extends Component {
             @else
                 <p class="mt-2 text-sm italic text-neutral-500">{{ __('Sin comentario') }}</p>
             @endif
+
+            {{-- Contexto opcional del mensaje: dónde y por dónde llegó. No identifica a quien reportó. --}}
+            <dl class="mt-3 flex flex-wrap gap-x-6 gap-y-1 text-sm" data-test="contexto-{{ $reporte['id'] }}">
+                @foreach (['departamento' => __('Departamento'), 'medio' => __('Medio')] as $campo => $etiqueta)
+                    @if ($campo === 'medio' && filled($reporte['barrio'] ?? null))
+                        {{-- El barrio solo existe en Formosa Capital: se muestra cuando está, sin "No especificado". --}}
+                        <div class="flex gap-1">
+                            <dt class="font-semibold text-neutral-900">{{ __('Barrio') }}:</dt>
+                            <dd class="text-neutral-800">{{ $reporte['barrio'] }}</dd>
+                        </div>
+                    @endif
+                    <div class="flex gap-1">
+                        <dt class="font-semibold text-neutral-900">{{ $etiqueta }}:</dt>
+                        @if (filled($reporte[$campo] ?? null))
+                            <dd class="text-neutral-800">{{ $reporte[$campo] }}</dd>
+                        @else
+                            <dd class="italic text-neutral-500">{{ __('No especificado') }}</dd>
+                        @endif
+                    </div>
+                @endforeach
+            </dl>
 
             <div class="mt-6 flex flex-col-reverse gap-2 border-t border-neutral-200 pt-4 sm:flex-row sm:justify-end">
                 <button
