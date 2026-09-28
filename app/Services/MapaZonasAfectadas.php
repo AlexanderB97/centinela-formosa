@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Enums\Barrio;
 use App\Enums\EstadoReporte;
+use App\Enums\TipoContenido;
 use App\Models\Reporte;
 
 /**
@@ -13,9 +14,9 @@ use App\Models\Reporte;
  * Privacy: a neighborhood only appears with at least MINIMO_REPORTES reports. The threshold is
  * higher than the rankings' (3) because a neighborhood is a much smaller area than a department:
  * a few reports there say more about who might have sent them.
- * Reports without a barrio do not count, and discarded reports (staff decided they were not a
- * scam) are excluded. Each point is an approximate reference location of the neighborhood, never
- * where a report came from.
+ * Reports without a barrio do not count, reports of file scans do not count either, and
+ * discarded reports (staff decided they were not a scam) are excluded. Each point is an
+ * approximate reference location of the neighborhood, never where a report came from.
  */
 class MapaZonasAfectadas
 {
@@ -124,6 +125,8 @@ class MapaZonasAfectadas
             ->select('barrio')
             ->selectRaw('count(*) as total')
             ->whereNotNull('barrio')
+            // Reports of file scans are not part of the map in this first version.
+            ->whereNotIn('analisis_id', fn ($consulta) => $consulta->select('id')->from('analisis')->where('tipo', TipoContenido::Archivo->value))
             ->where('estado', '<>', EstadoReporte::Descartado->value)
             ->groupBy('barrio')
             ->havingRaw('count(*) >= ?', [self::MINIMO_REPORTES])

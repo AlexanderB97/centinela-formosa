@@ -27,7 +27,8 @@ class RankingConsultados
      */
     public function obtener(): array
     {
-        $grupos = collect(TipoContenido::cases())
+        // File scans (TipoContenido::Archivo) are not part of the rankings.
+        $grupos = collect(TipoContenido::textuales())
             ->mapWithKeys(fn (TipoContenido $tipo) => [$tipo->value => $this->topPorTipo($tipo)]);
 
         $todos = $grupos->flatten(1);
